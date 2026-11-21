@@ -1,0 +1,20 @@
+package lt.nook.app.sync
+
+import java.time.Instant
+
+data class CompletedPage(val items: List<RItem>, val nextCursor: String?)
+
+/** How Nook talks to Todoist. Tests use FakeTodoist. */
+interface Transport {
+    suspend fun sync(token: String, syncToken: String, commands: List<Command>): SyncResponse
+    suspend fun completed(token: String, projectId: String, since: Instant, until: Instant, cursor: String?): CompletedPage
+}
+
+sealed class SyncError(msg: String) : Exception(msg) {
+    class Auth : SyncError("Token rejected")
+    class RateLimited(val retryAfterS: Long?) : SyncError("Rate limited")
+    class Server(val code: Int) : SyncError("Server error $code")
+    class Offline : SyncError("No connection")
+}
+
+const val MAX_COMMANDS = 100
