@@ -47,6 +47,9 @@ class FakeTodoist : Transport {
     fun deleteItem(id: String) { val (i, _) = items.getValue(id); items[id] = i.copy(isDeleted = true) to ++rev }
     fun closeElsewhere(id: String) { val (i, _) = items.getValue(id); items[id] = i.copy(checked = true) to ++rev }
     fun moveElsewhere(id: String, section: String?) { val (i, _) = items.getValue(id); items[id] = i.copy(sectionId = section) to ++rev }
+    fun history(project: String, content: String, section: String?, at: Instant) {
+        completedHistory += RItem("h${nextId++}", project, section, null, content, checked = true) to at
+    }
     fun deleteSection(id: String) { val (s, _) = sections.getValue(id); sections[id] = s.copy(isDeleted = true) to ++rev }
 
     fun open(project: String) = items.values.map { it.first }.filter { it.projectId == project && !it.checked && !it.isDeleted }
@@ -119,7 +122,9 @@ class FakeTodoist : Transport {
 
     private fun live(id: String?) = items[id]?.first?.takeIf { !it.isDeleted && !it.checked }
 
+    var completedCalls = 0
     override suspend fun completed(token: String, projectId: String, since: Instant, until: Instant, cursor: String?): CompletedPage {
+        completedCalls++
         completedError?.let { throw it }
         if (token != this.token) throw SyncError.Auth()
         val all = completedHistory.filter { it.first.projectId == projectId && it.second >= since && it.second < until }.map { it.first }
