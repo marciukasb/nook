@@ -14,4 +14,10 @@ class SmokeTest {
         val ctx = ApplicationProvider.getApplicationContext<Context>()
         assertEquals("Nook", ctx.getString(R.string.app_name))
     }
+
+    @Test
+    fun appHasItsOwnIcon() {
+        val ctx = ApplicationProvider.getApplicationContext<Context>()
+        assertEquals(R.mipmap.ic_launcher, ctx.applicationInfo.icon)
+    }
 }
