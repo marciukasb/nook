@@ -60,6 +60,8 @@ class SyncEngine(
     private val clock: () -> Long,
     var learner: Learner? = null,
 ) {
+    /** Runs after each successful sync, outside the sync lock (used to seed the category memory). */
+    var onSynced: (suspend () -> Unit)? = null
     private val dao = db.dao()
     private val _state = MutableStateFlow(SyncState())
     val state: StateFlow<SyncState> = _state.asStateFlow()
@@ -194,7 +196,11 @@ class SyncEngine(
     suspend fun flush(force: Boolean = false) {
         flushLock.withLock { flushLocked(force) }
         refreshPending()
+        if (_state.value.status == Status.Synced) onSynced?.invoke()
     }
+
+    /** Next sync fetches everything again (e.g. after the project names changed). */
+    suspend fun resetSync() = dao.setMeta(MetaE(SYNC_TOKEN, "*"))
 
     private suspend fun flushLocked(force: Boolean) {
         val tok = token()
