@@ -12,6 +12,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import lt.nook.app.core.ItemV
 import lt.nook.app.core.SectionV
+import lt.nook.app.core.shortNames
 import lt.nook.app.data.IdMapE
 import lt.nook.app.data.ItemE
 import lt.nook.app.data.Kind
@@ -85,7 +86,7 @@ class SyncEngine(
 
     fun items(kind: Kind): Flow<List<ItemV>> =
         combine(dao.observeItems(nameOf(kind)), dao.observePeople()) { items, people ->
-            val names = people.associate { it.id to it.name }
+            val names = shortNames(people.associate { it.id to it.name })
             items.map { it.toView(names) }
         }
 
@@ -93,7 +94,10 @@ class SyncEngine(
         dao.observeSections(nameOf(kind)).map { l -> l.map { SectionV(it.id, it.name, it.order) } }
 
     /** Collaborators of Shared tasks (the people a task can be assigned to). */
-    fun people(): Flow<List<PersonE>> = dao.observePeople().map { l -> l.filter { it.inTasks } }
+    fun people(): Flow<List<PersonE>> = dao.observePeople().map { l ->
+        val short = shortNames(l.associate { it.id to it.name })
+        l.filter { it.inTasks }.map { it.copy(name = short.getValue(it.id)) }
+    }
 
     suspend fun projectId(kind: Kind): String? = dao.projects().firstOrNull { it.name == nameOf(kind) }?.id
 

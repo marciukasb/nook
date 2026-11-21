@@ -29,7 +29,7 @@ suspend fun testConnection(transport: Transport, token: String, names: Map<Kind,
         val members = r.collaboratorStates.filter { it.projectId == tasksId && it.state == "active" }.map { it.userId }.toSet() +
             listOfNotNull(r.user?.id)
         val people = (r.collaborators.associate { it.id to it.fullName } + listOfNotNull(r.user).associate { it.id to it.fullName })
-            .filterKeys { it in members }.values.sorted()
+            .filterKeys { it in members }.let { lt.nook.app.core.shortNames(it) }.values.sorted()
         TestResult.Ok(wanted, people)
     }
 } catch (e: SyncError.Auth) {
