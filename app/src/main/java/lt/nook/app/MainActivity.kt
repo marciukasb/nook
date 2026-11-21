@@ -16,6 +16,7 @@ import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -27,12 +28,17 @@ import kotlinx.coroutines.launch
 import lt.nook.app.auth.testConnection
 import lt.nook.app.ui.NookApp
 import lt.nook.app.ui.SignInScreen
+import lt.nook.app.ui.UpdateBanner
+import lt.nook.app.update.Release
+import lt.nook.app.update.Updater
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         val app = application as NookApplication
+        val updater = Updater(Updater::httpGet, getSharedPreferences("update", MODE_PRIVATE), System::currentTimeMillis,
+            BuildConfig.VERSION_CODE, BuildConfig.UPDATE_REPO)
         setContent {
             NookTheme {
                 var signedIn by remember { mutableStateOf(app.tokens.get() != null) }
@@ -50,9 +56,18 @@ class MainActivity : ComponentActivity() {
                             })
                     }
                 } else {
+                    var update by remember { mutableStateOf<Release?>(null) }
+                    LaunchedEffect(Unit) { update = updater.check() }
                     NookApp(app.engine, app.memory,
                         onSettings = { settingsOpen = true },
-                        onSignOut = { scope.launch { app.session.signOut(); signedIn = false } })
+                        onSignOut = { scope.launch { app.session.signOut(); signedIn = false } },
+                        updateBanner = {
+                            update?.let { r ->
+                                UpdateBanner(r,
+                                    onInstall = { scope.launch { Updater.downloadAndInstall(this@MainActivity, r) } },
+                                    onLater = { updater.dismiss(r); update = null })
+                            }
+                        })
                 }
             }
         }

@@ -22,7 +22,7 @@ android {
         targetSdk = 36
         versionCode = 1
         versionName = "0.1"
-        buildConfigField("String", "UPDATE_REPO", "\"OWNER/nook\"")
+        buildConfigField("String", "UPDATE_REPO", "\"marciukasb/nook\"")
     }
 
     signingConfigs {
