@@ -11,6 +11,7 @@ import lt.nook.app.data.CategoryMemory
 import lt.nook.app.data.Kind
 import lt.nook.app.data.NookDb
 import lt.nook.app.data.Settings
+import lt.nook.app.sync.FlushWorker
 import lt.nook.app.sync.HttpTransport
 import lt.nook.app.sync.SyncEngine
 import lt.nook.app.sync.Transport
@@ -35,6 +36,7 @@ class NookApplication : Application() {
         memory = CategoryMemory(db, System::currentTimeMillis)
         engine = SyncEngine(db, transport, tokens::get, settings::projectNames, System::currentTimeMillis, memory)
         session = Session(tokens, settings, db)
+        engine.onStillPending = { FlushWorker.schedule(this) }
         engine.onSynced = {
             if (seeding.tryLock()) try {
                 val token = tokens.get()

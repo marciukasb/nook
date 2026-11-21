@@ -62,6 +62,8 @@ class SyncEngine(
 ) {
     /** Runs after each successful sync, outside the sync lock (used to seed the category memory). */
     var onSynced: (suspend () -> Unit)? = null
+    /** Called when a sync failed for network reasons with changes still queued (schedules a background flush). */
+    var onStillPending: (() -> Unit)? = null
     private val dao = db.dao()
     private val _state = MutableStateFlow(SyncState())
     val state: StateFlow<SyncState> = _state.asStateFlow()
@@ -196,7 +198,9 @@ class SyncEngine(
     suspend fun flush(force: Boolean = false) {
         flushLock.withLock { flushLocked(force) }
         refreshPending()
-        if (_state.value.status == Status.Synced) onSynced?.invoke()
+        val st = _state.value
+        if (st.status == Status.Synced) onSynced?.invoke()
+        if (st.status == Status.Offline && st.pending > 0) onStillPending?.invoke()
     }
 
     /** Next sync fetches everything again (e.g. after the project names changed). */
