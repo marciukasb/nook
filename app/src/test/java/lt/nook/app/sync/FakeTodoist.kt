@@ -27,6 +27,8 @@ class FakeTodoist : Transport {
     private var failNext: SyncError? = null
     private var dropAfterApply = false
     var completedError: SyncError? = null
+    /** Makes Todoist answer 400 for any request whose commands match. */
+    var reject400: ((List<Command>) -> Boolean)? = null
 
     fun failNext(e: SyncError) { failNext = e }
     fun dropNextResponseAfterApply() { dropAfterApply = true }
@@ -60,6 +62,7 @@ class FakeTodoist : Transport {
         calls++
         if (token != this.token) throw SyncError.Auth()
         failNext?.let { failNext = null; throw it }
+        if (reject400?.invoke(commands) == true) throw SyncError.BadRequest()
         require(commands.size <= MAX_COMMANDS)
         received += commands
         val status = LinkedHashMap<String, kotlinx.serialization.json.JsonElement>()
@@ -93,6 +96,7 @@ class FakeTodoist : Transport {
     private fun apply(c: Command, mapping: MutableMap<String, String>): String? {
         when (c.type) {
             "item_add" -> {
+                c.arg("section_id")?.let { sid -> if (sections[sid]?.first?.isDeleted != false) return "Section not found" }
                 val id = item(c.arg("project_id")!!, c.arg("content")!!, c.arg("section_id"), null, c.arg("responsible_uid"))
                 mapping[c.tempId!!] = id
             }

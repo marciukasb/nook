@@ -35,7 +35,7 @@ class NookApplication : Application() {
         transport = HttpTransport()
         memory = CategoryMemory(db, System::currentTimeMillis)
         engine = SyncEngine(db, transport, tokens::get, settings::projectNames, System::currentTimeMillis, memory)
-        session = Session(tokens, settings, db)
+        session = Session(tokens, settings, db, engine)
         engine.onStillPending = { FlushWorker.schedule(this) }
         engine.onSynced = {
             if (seeding.tryLock()) try {

@@ -15,6 +15,8 @@ sealed class SyncError(msg: String) : Exception(msg) {
     class RateLimited(val retryAfterS: Long?) : SyncError("Rate limited")
     class Server(val code: Int) : SyncError("Server error $code")
     class Offline : SyncError("No connection")
+    /** Todoist refused the request itself (400), e.g. an invalid sync token or a malformed command. */
+    class BadRequest : SyncError("Bad request")
 }
 
 const val MAX_COMMANDS = 100

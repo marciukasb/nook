@@ -49,6 +49,7 @@ class HttpTransport(
             client.newCall(req).execute().use { r ->
                 when {
                     r.code == 401 || r.code == 403 -> throw SyncError.Auth()
+                    r.code == 400 -> throw SyncError.BadRequest()
                     r.code == 429 -> throw SyncError.RateLimited(r.header("Retry-After")?.toLongOrNull())
                     !r.isSuccessful -> throw SyncError.Server(r.code)
                     else -> r.body.string()

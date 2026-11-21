@@ -101,6 +101,7 @@ fun NookApp(
     var confirm by remember { mutableStateOf<Pair<ItemV, Int>?>(null) }
     var menu by remember { mutableStateOf(false) }
     var refreshing by remember { mutableStateOf(false) }
+    var confirmSignOut by remember { mutableStateOf(false) }
     val snack = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     val state by engine.state.collectAsState()
@@ -115,12 +116,21 @@ fun NookApp(
         state.message?.let { snack.showSnackbar(it); engine.clearMessage() }
     }
 
+    fun sync() = scope.launch { engine.flush(force = true) }
+
     fun doTick(item: ItemV) = scope.launch {
-        when (val r = engine.tick(item.id)) {
+        // Normal items: the row goes and Undo shows at once; the network happens in the background.
+        // Repeating tasks wait for the sync so the snackbar can name the next date (the row stays meanwhile).
+        when (val r = engine.tick(item.id, sync = item.recurring)) {
             is TickResult.Hidden -> {
+                sync()
                 snack.currentSnackbarData?.dismiss()
                 val res = snack.showSnackbar("${item.content} ticked off", "Undo", duration = SnackbarDuration.Short)
-                if (res == SnackbarResult.ActionPerformed) engine.undo(r.undo)
+                if (res == SnackbarResult.ActionPerformed) { engine.undo(r.undo, sync = false); sync() }
+            }
+            TickResult.AlreadyQueued -> {
+                snack.currentSnackbarData?.dismiss()
+                snack.showSnackbar("Will move to its next date when back online")
             }
             is TickResult.Advanced -> {
                 snack.currentSnackbarData?.dismiss()
@@ -149,7 +159,10 @@ fun NookApp(
                         IconButton(onClick = { menu = true }) { Icon(Icons.Filled.MoreVert, "More") }
                         DropdownMenu(menu, { menu = false }) {
                             DropdownMenuItem({ Text("Settings") }, { menu = false; onSettings() })
-                            DropdownMenuItem({ Text("Sign out") }, { menu = false; onSignOut() })
+                            DropdownMenuItem({ Text("Sign out") }, {
+                                menu = false
+                                if (state.pending > 0) confirmSignOut = true else onSignOut()
+                            })
                         }
                     }
                 },
@@ -180,6 +193,13 @@ fun NookApp(
 
     if (adding) AddSheet(engine, memory, tab, scope, onDismiss = { adding = false })
     moving?.let { item -> MoveSheet(engine, tab, item, scope, onDismiss = { moving = null }) }
+    if (confirmSignOut) AlertDialog(
+        onDismissRequest = { confirmSignOut = false },
+        title = { Text("Sign out?") },
+        text = { Text("${state.pending} changes not synced yet will be lost.") },
+        confirmButton = { TextButton({ confirmSignOut = false; onSignOut() }) { Text("Sign out") } },
+        dismissButton = { TextButton({ confirmSignOut = false }) { Text("Cancel") } },
+    )
     confirm?.let { (item, n) ->
         AlertDialog(
             onDismissRequest = { confirm = null },

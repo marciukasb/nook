@@ -5,6 +5,7 @@ import kotlinx.coroutines.withContext
 import lt.nook.app.data.Kind
 import lt.nook.app.data.NookDb
 import lt.nook.app.data.Settings
+import lt.nook.app.sync.SyncEngine
 import lt.nook.app.sync.SyncError
 import lt.nook.app.sync.Transport
 
@@ -37,13 +38,15 @@ suspend fun testConnection(transport: Transport, token: String, names: Map<Kind,
     TestResult.NoConnection
 }
 
-class Session(private val tokens: TokenStore, private val settings: Settings, private val db: NookDb) {
+class Session(private val tokens: TokenStore, private val settings: Settings, private val db: NookDb,
+              private val engine: SyncEngine? = null) {
     fun signIn(token: String, names: Map<Kind, String>) { tokens.set(token.trim()); settings.save(names) }
 
     /** Forgets the token, the project names and everything stored locally. */
     suspend fun signOut() {
         tokens.clear()
         settings.save(Settings.DEFAULTS)
-        withContext(Dispatchers.IO) { db.clearAllTables() }
+        val clear: suspend () -> Unit = { withContext(Dispatchers.IO) { db.clearAllTables() } }
+        if (engine != null) engine.wipe(clear) else clear()
     }
 }

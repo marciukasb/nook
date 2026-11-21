@@ -50,6 +50,10 @@ data class PendingE(
     val label: String?,
 )
 
+/** Temp id → real id, as given by Todoist's temp_id_mapping. */
+@Entity
+data class IdMapE(@PrimaryKey val temp: String, val real: String)
+
 @Entity
 data class MetaE(@PrimaryKey val key: String, val value: String)
 
@@ -89,12 +93,15 @@ interface NookDao {
     @Upsert suspend fun upsertPending(p: List<PendingE>)
     @Query("DELETE FROM PendingE WHERE uuid IN (:uuids)") suspend fun deletePending(uuids: List<String>)
 
+    @Query("SELECT real FROM IdMapE WHERE temp = :temp") suspend fun realId(temp: String): String?
+    @Upsert suspend fun saveIds(m: List<IdMapE>)
+
     @Query("SELECT value FROM MetaE WHERE `key` = :key") suspend fun meta(key: String): String?
     @Upsert suspend fun setMeta(m: MetaE)
 }
 
 @Database(
-    entities = [ItemE::class, SectionE::class, ProjectE::class, PersonE::class, PendingE::class, MetaE::class, KnownE::class],
+    entities = [ItemE::class, SectionE::class, ProjectE::class, PersonE::class, PendingE::class, MetaE::class, KnownE::class, IdMapE::class],
     version = 1, exportSchema = false,
 )
 abstract class NookDb : RoomDatabase() {

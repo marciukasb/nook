@@ -67,6 +67,7 @@ fun AddSheet(engine: SyncEngine, memory: CategoryMemory, kind: Kind, scope: Coro
 
     LaunchedEffect(text) { suggestions = memory.suggestions(kind, text) }
     LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
+    LaunchedEffect(kind) { if (engine.projectId(kind) == null) hint = SyncEngine.NOT_LOADED }
 
     fun reset() { text = ""; hint = null; pick = false; newCat = false; newCatName = "" }
 
@@ -74,7 +75,10 @@ fun AddSheet(engine: SyncEngine, memory: CategoryMemory, kind: Kind, scope: Coro
 
     fun addTo(name: String, sectionId: String?) {
         reset()
-        scope.launch { runCatching { engine.add(kind, name, sectionId, if (lists) null else assignee) } }
+        scope.launch {
+            if (engine.add(kind, name, sectionId, if (lists) null else assignee, sync = false) == null) hint = SyncEngine.NOT_LOADED
+            else engine.flush(force = true)
+        }
     }
 
     fun place(name: String) = scope.launch {
@@ -130,11 +134,10 @@ fun AddSheet(engine: SyncEngine, memory: CategoryMemory, kind: Kind, scope: Coro
                         val name = text.trim(); val cat = newCatName.trim()
                         reset()
                         scope.launch {
-                            runCatching {
-                                val existing = sections.firstOrNull { nameKey(it.name) == nameKey(cat) }
-                                val sid = existing?.id ?: engine.newSection(kind, cat)
-                                engine.add(kind, name, sid, null)
-                            }
+                            val existing = sections.firstOrNull { nameKey(it.name) == nameKey(cat) }
+                            val sid = existing?.id ?: engine.newSection(kind, cat)
+                            if (sid == null || engine.add(kind, name, sid, null, sync = false) == null) hint = SyncEngine.NOT_LOADED
+                            else engine.flush(force = true)
                         }
                     }) { Text("Create") }
                 }
@@ -165,7 +168,7 @@ fun MoveSheet(engine: SyncEngine, kind: Kind, item: ItemV, scope: CoroutineScope
                 val current = item.sectionId == id
                 Text(if (current) "$name (now)" else name,
                     Modifier.fillMaxWidth().testTag("move_$name").clickable(enabled = !current) {
-                        onDismiss(); scope.launch { engine.move(item.id, id) }
+                        onDismiss(); scope.launch { engine.move(item.id, id, sync = false); engine.flush(force = true) }
                     }.padding(vertical = 14.dp),
                     style = MaterialTheme.typography.bodyLarge)
             }

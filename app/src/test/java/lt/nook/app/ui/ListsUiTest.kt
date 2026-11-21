@@ -196,6 +196,27 @@ class ListsUiTest {
         waitText("Sam")
     }
 
+    @Test fun addBeforeListsLoaded_saysSo() {
+        rule.setContent { NookApp(engine, memory, onSettings = {}, onSignOut = {}, autoRefresh = false) }
+        openAdd()
+        waitText("Lists aren't loaded yet")
+    }
+
+    @Test fun signOutWithUnsyncedChanges_warnsFirst() {
+        var signedOut = false
+        fake.item(fake.groceries, "Milk")
+        runBlocking { engine.flush() }
+        rule.setContent { NookApp(engine, memory, onSettings = {}, onSignOut = { signedOut = true }, autoRefresh = false) }
+        waitText("Milk")
+        fake.failNext(SyncError.Offline())
+        rule.onNodeWithContentDescription("Tick Milk").performClick()
+        waitText("Not synced yet (1 changes)")
+        rule.onNodeWithContentDescription("More").performClick()
+        rule.onNodeWithText("Sign out").performClick()
+        waitText("1 changes not synced yet will be lost.")
+        assertTrue(!signedOut)
+    }
+
     @Test fun offline_showsPendingCount() {
         fake.item(fake.groceries, "Milk")
         start()
