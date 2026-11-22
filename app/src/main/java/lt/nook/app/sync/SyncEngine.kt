@@ -90,6 +90,19 @@ class SyncEngine(
             items.map { it.toView(names) }
         }
 
+    /** The signed-in person's Todoist id (known after the first sync). */
+    suspend fun meId(): String? = dao.meta(USER_ID)
+
+    /** Open Shared tasks assigned to the signed-in person, in the Tasks tab's order (for the home-screen widget). */
+    suspend fun myTasks(): List<ItemV> {
+        val me = dao.meta(USER_ID) ?: return emptyList()
+        val pid = projectId(Kind.TASKS) ?: return emptyList()
+        val rows = dao.itemsOf(pid).filter { !it.hidden }
+        val sections = dao.sectionsOf(pid).map { SectionV(it.id, it.name, it.order) }
+        val views = rows.map { ItemV(it.id, it.content, it.sectionId, it.parentId, it.order, it.responsibleUid, it.dueDate, it.recurring) }
+        return lt.nook.app.core.group(views, sections).flatMap { g -> g.rows.map { it.item } }.filter { it.assignee == me }
+    }
+
     fun sections(kind: Kind): Flow<List<SectionV>> =
         dao.observeSections(nameOf(kind)).map { l -> l.map { SectionV(it.id, it.name, it.order) } }
 

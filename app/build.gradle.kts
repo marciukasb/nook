@@ -59,6 +59,8 @@ dependencies {
     ksp(libs.room.compiler)
     implementation(libs.work.runtime)
     implementation(libs.okhttp)
+    implementation(libs.glance.appwidget)
+    implementation(libs.glance.material3)
     implementation(libs.serialization.json)
     implementation(libs.coroutines.android)
 
@@ -68,6 +70,7 @@ dependencies {
     testImplementation(libs.coroutines.test)
     testImplementation(libs.work.testing)
     testImplementation(libs.okhttp.mockwebserver)
+    testImplementation(libs.glance.testing)
     testImplementation(platform(libs.compose.bom))
     testImplementation(libs.compose.ui.test.junit4)
     debugImplementation(libs.compose.ui.test.manifest)

@@ -51,13 +51,14 @@ import lt.nook.app.sync.SyncEngine
  */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
-fun AddSheet(engine: SyncEngine, memory: CategoryMemory, kind: Kind, scope: CoroutineScope, onDismiss: () -> Unit) {
+fun AddSheet(engine: SyncEngine, memory: CategoryMemory, kind: Kind, scope: CoroutineScope,
+             initialAssignee: String? = null, onDismiss: () -> Unit) {
     var text by remember { mutableStateOf("") }
     var hint by remember { mutableStateOf<String?>(null) }
     var pick by remember { mutableStateOf(false) }
     var newCat by remember { mutableStateOf(false) }
     var newCatName by remember { mutableStateOf("") }
-    var assignee by remember { mutableStateOf<String?>(null) }
+    var assignee by remember { mutableStateOf(initialAssignee) }
     var suggestions by remember { mutableStateOf(emptyList<Known>()) }
     val sections by remember(kind) { engine.sections(kind) }.collectAsState(initial = emptyList())
     val items by remember(kind) { engine.items(kind) }.collectAsState(initial = emptyList())

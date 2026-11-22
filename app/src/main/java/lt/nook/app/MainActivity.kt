@@ -1,5 +1,6 @@
 package lt.nook.app
 
+import android.content.Intent
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -26,16 +27,34 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import kotlinx.coroutines.launch
 import lt.nook.app.auth.testConnection
+import lt.nook.app.data.Kind
+import lt.nook.app.widget.refreshWidgets
 import lt.nook.app.ui.NookApp
 import lt.nook.app.ui.SignInScreen
 import lt.nook.app.ui.UpdateBanner
 import lt.nook.app.update.Release
 import lt.nook.app.update.Updater
 
+/** Opened from the widget: show a tab, maybe with the add sheet open. */
+data class OpenRequest(val tab: Kind, val add: Boolean)
+
 class MainActivity : ComponentActivity() {
+    private var request by mutableStateOf<OpenRequest?>(null)
+
+    private fun readRequest(intent: Intent?) {
+        val tab = intent?.getStringExtra(EXTRA_TAB)?.let { t -> Kind.entries.firstOrNull { it.name == t } } ?: return
+        request = OpenRequest(tab, intent.getBooleanExtra(EXTRA_ADD, false))
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        readRequest(intent)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        if (savedInstanceState == null) readRequest(intent)
         val app = application as NookApplication
         val updater = Updater(Updater::httpGet, getSharedPreferences("update", MODE_PRIVATE), System::currentTimeMillis,
             BuildConfig.VERSION_CODE, BuildConfig.UPDATE_REPO)
@@ -52,7 +71,7 @@ class MainActivity : ComponentActivity() {
                             onSave = { t, n ->
                                 app.session.signIn(t, n)
                                 signedIn = true; settingsOpen = false
-                                scope.launch { app.engine.resetSync(); app.engine.flush(force = true) }
+                                scope.launch { app.engine.resetSync(); app.engine.flush(force = true); refreshWidgets(app) }
                             })
                     }
                 } else {
@@ -60,7 +79,8 @@ class MainActivity : ComponentActivity() {
                     LaunchedEffect(Unit) { update = updater.check() }
                     NookApp(app.engine, app.memory,
                         onSettings = { settingsOpen = true },
-                        onSignOut = { scope.launch { app.session.signOut(); signedIn = false } },
+                        onSignOut = { scope.launch { app.session.signOut(); signedIn = false; refreshWidgets(app) } },
+                        openRequest = request, onRequestHandled = { request = null },
                         updateBanner = {
                             update?.let { r ->
                                 UpdateBanner(r,
@@ -71,6 +91,11 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    companion object {
+        const val EXTRA_TAB = "lt.nook.app.TAB"
+        const val EXTRA_ADD = "lt.nook.app.ADD"
     }
 }
 

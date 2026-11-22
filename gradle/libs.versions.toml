@@ -14,6 +14,7 @@ coroutines = "1.11.0"
 robolectric = "4.18.1"
 junit = "4.13.2"
 testCore = "1.7.0"
+glance = "1.2.0"
 
 [libraries]
 core-ktx = { module = "androidx.core:core-ktx", version.ref = "coreKtx" }
@@ -40,6 +41,10 @@ coroutines-test = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-test", ve
 robolectric = { module = "org.robolectric:robolectric", version.ref = "robolectric" }
 junit = { module = "junit:junit", version.ref = "junit" }
 test-core = { module = "androidx.test:core-ktx", version.ref = "testCore" }
+
+glance-appwidget = { module = "androidx.glance:glance-appwidget", version.ref = "glance" }
+glance-material3 = { module = "androidx.glance:glance-material3", version.ref = "glance" }
+glance-testing = { module = "androidx.glance:glance-appwidget-testing", version.ref = "glance" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

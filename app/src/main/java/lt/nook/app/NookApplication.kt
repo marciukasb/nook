@@ -11,7 +11,13 @@ import lt.nook.app.data.CategoryMemory
 import lt.nook.app.data.Kind
 import lt.nook.app.data.NookDb
 import lt.nook.app.data.Settings
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import lt.nook.app.sync.FlushWorker
+import lt.nook.app.widget.WidgetActions
+import lt.nook.app.widget.refreshWidgets
 import lt.nook.app.sync.HttpTransport
 import lt.nook.app.sync.SyncEngine
 import lt.nook.app.sync.Transport
@@ -25,7 +31,9 @@ class NookApplication : Application() {
     lateinit var memory: CategoryMemory
     lateinit var engine: SyncEngine
     lateinit var session: Session
+    lateinit var widgetActions: WidgetActions
     private val seeding = Mutex()
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     override fun onCreate() {
         super.onCreate()
@@ -36,8 +44,11 @@ class NookApplication : Application() {
         memory = CategoryMemory(db, System::currentTimeMillis)
         engine = SyncEngine(db, transport, tokens::get, settings::projectNames, System::currentTimeMillis, memory)
         session = Session(tokens, settings, db, engine)
-        engine.onStillPending = { FlushWorker.schedule(this) }
+        widgetActions = WidgetActions(engine)
+        // The home-screen widget follows every sync, and offline changes too.
+        engine.onStillPending = { FlushWorker.schedule(this); scope.launch { refreshWidgets(this@NookApplication) } }
         engine.onSynced = {
+            refreshWidgets(this)
             if (seeding.tryLock()) try {
                 val token = tokens.get()
                 if (token != null) for (k in Kind.entries) engine.projectId(k)?.let { memory.seedIfDue(k, transport, token, it) }

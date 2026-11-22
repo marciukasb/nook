@@ -94,9 +94,18 @@ fun NookApp(
     onSignOut: () -> Unit,
     autoRefresh: Boolean = true,
     updateBanner: @Composable () -> Unit = {},
+    openRequest: lt.nook.app.OpenRequest? = null,
+    onRequestHandled: () -> Unit = {},
 ) {
     var tab by rememberSaveable { mutableStateOf(Kind.GROCERIES) }
     var adding by remember { mutableStateOf(false) }
+    var addForMe by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(openRequest) {   // from the home-screen widget: the Tasks tab, maybe adding a task for me
+        val r = openRequest ?: return@LaunchedEffect
+        tab = r.tab
+        if (r.add) { addForMe = engine.meId(); adding = true }
+        onRequestHandled()
+    }
     var moving by remember { mutableStateOf<ItemV?>(null) }
     var confirm by remember { mutableStateOf<Pair<ItemV, Int>?>(null) }
     var menu by remember { mutableStateOf(false) }
@@ -191,7 +200,7 @@ fun NookApp(
         }
     }
 
-    if (adding) AddSheet(engine, memory, tab, scope, onDismiss = { adding = false })
+    if (adding) AddSheet(engine, memory, tab, scope, initialAssignee = addForMe, onDismiss = { adding = false; addForMe = null })
     moving?.let { item -> MoveSheet(engine, tab, item, scope, onDismiss = { moving = null }) }
     if (confirmSignOut) AlertDialog(
         onDismissRequest = { confirmSignOut = false },

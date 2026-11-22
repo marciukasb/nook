@@ -1,0 +1,86 @@
+package lt.nook.app.widget
+
+import android.content.Context
+import androidx.room.Room
+import androidx.test.core.app.ApplicationProvider
+import kotlinx.coroutines.test.runTest
+import lt.nook.app.data.Kind
+import lt.nook.app.data.NookDb
+import lt.nook.app.sync.FakeTodoist
+import lt.nook.app.sync.RDue
+import lt.nook.app.sync.SyncEngine
+import lt.nook.app.sync.SyncError
+import org.junit.After
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Before
+import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+
+@RunWith(RobolectricTestRunner::class)
+class MyTasksTest {
+    private lateinit var db: NookDb
+    private val fake = FakeTodoist()
+    private lateinit var engine: SyncEngine
+
+    @Before fun up() {
+        db = Room.inMemoryDatabaseBuilder(ApplicationProvider.getApplicationContext<Context>(), NookDb::class.java)
+            .allowMainThreadQueries().build()
+        engine = SyncEngine(db, fake, { "good" },
+            { mapOf(Kind.GROCERIES to "Groceries", Kind.SHOPPING to "Shopping", Kind.TASKS to "Shared tasks") }, { 0L })
+    }
+    @After fun down() = db.close()
+
+    @Test fun onlyMine_inTheTasksTabOrder() = runTest {
+        val sec = fake.section(fake.tasks, "House", 1)
+        fake.item(fake.tasks, "Call plumber", responsible = fake.me)
+        fake.item(fake.tasks, "Her task", responsible = fake.partner)
+        fake.item(fake.tasks, "Anyone's task")
+        fake.item(fake.tasks, "Fix shelf", section = sec, responsible = fake.me)
+        fake.item(fake.groceries, "Milk")
+        engine.flush()
+        assertEquals(listOf("Fix shelf", "Call plumber"), engine.myTasks().map { it.content })   // section first, like the tab
+    }
+
+    @Test fun beforeFirstSync_nothing() = runTest {
+        assertEquals(emptyList<Any>(), engine.myTasks())
+    }
+
+    @Test fun tick_hides_and_undo_restores() = runTest {
+        val id = fake.item(fake.tasks, "Call plumber", responsible = fake.me)
+        engine.flush()
+        val w = WidgetActions(engine)
+        fake.failNext(SyncError.Offline())                     // works offline too
+        w.tick(id)
+        assertEquals(emptyList<Any>(), engine.myTasks().map { it.content })
+        assertTrue(w.canUndo())
+        w.undo()
+        assertEquals(listOf("Call plumber"), engine.myTasks().map { it.content })
+        assertFalse(w.canUndo())
+        engine.flush(force = true)
+        assertFalse(fake.get(id)!!.checked)
+    }
+
+    @Test fun recurring_tick_keeps_it_and_offers_no_undo() = runTest {
+        val id = fake.item(fake.tasks, "Water plants", responsible = fake.me, due = RDue("2026-11-24", "every monday", true))
+        engine.flush()
+        val w = WidgetActions(engine)
+        w.tick(id)
+        assertEquals(listOf("Water plants"), engine.myTasks().map { it.content })
+        assertFalse(w.canUndo())
+    }
+
+    @Test fun undo_expires() = runTest {
+        var now = 0L
+        val id = fake.item(fake.tasks, "Call plumber", responsible = fake.me)
+        engine.flush()
+        val w = WidgetActions(engine) { now }
+        w.tick(id)
+        now += 11 * 60_000
+        assertFalse(w.canUndo())
+        assertNull(w.undo())
+    }
+}
