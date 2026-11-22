@@ -32,6 +32,8 @@ class NookApplication : Application() {
     lateinit var engine: SyncEngine
     lateinit var session: Session
     lateinit var widgetActions: WidgetActions
+    /** Signed in or not, live (for the widget). MainActivity updates it on sign-in/out. */
+    val signedIn = kotlinx.coroutines.flow.MutableStateFlow(false)
     private val seeding = Mutex()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
@@ -45,6 +47,7 @@ class NookApplication : Application() {
         engine = SyncEngine(db, transport, tokens::get, settings::projectNames, System::currentTimeMillis, memory)
         session = Session(tokens, settings, db, engine)
         widgetActions = WidgetActions(engine)
+        signedIn.value = tokens.get() != null
         // The home-screen widget follows every sync, and offline changes too.
         engine.onStillPending = { FlushWorker.schedule(this); scope.launch { refreshWidgets(this@NookApplication) } }
         engine.onSynced = {

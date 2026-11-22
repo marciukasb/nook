@@ -1,5 +1,6 @@
 package lt.nook.app.widget
 
+import kotlinx.coroutines.flow.MutableStateFlow
 import lt.nook.app.sync.SyncEngine
 import lt.nook.app.sync.TickResult
 import lt.nook.app.sync.UndoToken
@@ -12,21 +13,28 @@ import lt.nook.app.sync.UndoToken
 class WidgetActions(private val engine: SyncEngine, private val clock: () -> Long = System::currentTimeMillis) {
     private var last: UndoToken? = null
     private var lastAt = 0L
+    /** Whether the widget shows "Undo" (live; a fresh process starts without one). */
+    val undoAvailable = MutableStateFlow(false)
 
     suspend fun tick(id: String): TickResult {
         val r = engine.tick(id, sync = false)
         if (r is TickResult.Hidden) { last = r.undo; lastAt = clock() } else if (r !is TickResult.NotFound) last = null
+        undoAvailable.value = last != null
         return r
     }
 
     fun canUndo() = last != null && clock() - lastAt < UNDO_MS
 
     suspend fun undo(): UndoToken? {
-        val t = last?.takeIf { canUndo() } ?: return null
+        val t = last?.takeIf { canUndo() }
         last = null
-        engine.undo(t, sync = false)
+        undoAvailable.value = false
+        if (t != null) engine.undo(t, sync = false)
         return t
     }
+
+    /** Sign-out: an old account's tick must never be undone into a new one. */
+    fun clear() { last = null; undoAvailable.value = false }
 
     companion object { const val UNDO_MS = 10 * 60_000L }
 }

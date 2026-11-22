@@ -3,6 +3,7 @@ package lt.nook.app.widget
 import android.content.Context
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
 import lt.nook.app.data.Kind
 import lt.nook.app.data.NookDb
@@ -70,6 +71,35 @@ class MyTasksTest {
         val w = WidgetActions(engine)
         w.tick(id)
         assertEquals(listOf("Water plants"), engine.myTasks().map { it.content })
+        assertFalse(w.canUndo())
+    }
+
+    @Test fun flow_follows_ticks_and_undo() = runTest {
+        val id = fake.item(fake.tasks, "Call plumber", responsible = fake.me)
+        fake.item(fake.tasks, "Fix shelf", responsible = fake.me)
+        engine.flush()
+        val w = WidgetActions(engine)
+        assertEquals(listOf("Call plumber", "Fix shelf"), engine.myTasksFlow().first().tasks.map { it.content })
+        w.tick(id)
+        assertEquals(listOf("Fix shelf"), engine.myTasksFlow().first().tasks.map { it.content })
+        assertTrue(w.undoAvailable.value)
+        w.undo()
+        assertEquals(listOf("Call plumber", "Fix shelf"), engine.myTasksFlow().first().tasks.map { it.content })
+        assertFalse(w.undoAvailable.value)
+    }
+
+    @Test fun flow_knows_when_the_first_sync_hasnt_happened() = runTest {
+        assertNull(engine.myTasksFlow().first().me)
+        engine.flush()
+        assertEquals(fake.me, engine.myTasksFlow().first().me)
+    }
+
+    @Test fun clear_forgets_undo() = runTest {
+        val id = fake.item(fake.tasks, "Call plumber", responsible = fake.me)
+        engine.flush()
+        val w = WidgetActions(engine)
+        w.tick(id)
+        w.clear()
         assertFalse(w.canUndo())
     }
 

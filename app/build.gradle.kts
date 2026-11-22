@@ -60,7 +60,6 @@ dependencies {
     implementation(libs.work.runtime)
     implementation(libs.okhttp)
     implementation(libs.glance.appwidget)
-    implementation(libs.glance.material3)
     implementation(libs.serialization.json)
     implementation(libs.coroutines.android)
 

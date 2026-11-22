@@ -16,6 +16,11 @@ import androidx.glance.appwidget.GlanceAppWidget
 import androidx.glance.appwidget.GlanceAppWidgetReceiver
 import androidx.glance.appwidget.action.ActionCallback
 import androidx.glance.appwidget.action.actionRunCallback
+import androidx.glance.appwidget.action.actionStartActivity
+import androidx.glance.LocalContext
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import lt.nook.app.sync.FlushWorker
 import androidx.glance.appwidget.appWidgetBackground
 import androidx.glance.appwidget.cornerRadius
 import androidx.glance.appwidget.lazy.LazyColumn
@@ -47,7 +52,7 @@ import lt.nook.app.core.ItemV
 import java.util.concurrent.TimeUnit
 
 /** What the widget shows; built from Nook's own offline copy, so it works without signal. */
-data class WidgetState(val signedIn: Boolean, val tasks: List<ItemV>, val canUndo: Boolean)
+data class WidgetState(val signedIn: Boolean, val tasks: List<ItemV>, val canUndo: Boolean, val synced: Boolean = true)
 
 private val ID = ActionParameters.Key<String>("id")
 
@@ -55,8 +60,16 @@ private val ID = ActionParameters.Key<String>("id")
 class MyTasksWidget : GlanceAppWidget() {
     override suspend fun provideGlance(context: Context, id: GlanceId) {
         val app = context.applicationContext as NookApplication
-        val state = WidgetState(app.tokens.get() != null, app.engine.myTasks(), app.widgetActions.canUndo())
-        provideContent { GlanceTheme { WidgetContent(state) } }
+        val flow = app.engine.myTasksFlow()
+        provideContent {
+            // Live: the widget follows Nook's database, sign-in and undo while it's on screen.
+            val data by flow.collectAsState(initial = null)
+            val undo by app.widgetActions.undoAvailable.collectAsState()
+            val signedIn by app.signedIn.collectAsState()
+            GlanceTheme {
+                WidgetContent(WidgetState(signedIn, data?.tasks.orEmpty(), undo && signedIn, synced = data?.me != null))
+            }
+        }
     }
 }
 
@@ -70,7 +83,7 @@ fun WidgetContent(s: WidgetState) {
     Column(GlanceModifier.fillMaxSize().appWidgetBackground().background(c.widgetBackground).cornerRadius(20.dp).padding(12.dp)) {
         Row(GlanceModifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Text(if (s.signedIn) "My tasks · ${s.tasks.size}" else "My tasks",
-                GlanceModifier.defaultWeight().clickable(actionRunCallback<OpenAction>()),
+                GlanceModifier.defaultWeight().clickable(actionStartActivity(openNook(LocalContext.current, add = false))),
                 style = TextStyle(color = c.onSurface, fontSize = 16.sp, fontWeight = FontWeight.Bold))
             if (s.canUndo) {
                 Text("Undo", GlanceModifier.padding(horizontal = 8.dp).clickable(actionRunCallback<UndoAction>()),
@@ -78,17 +91,19 @@ fun WidgetContent(s: WidgetState) {
             }
             if (s.signedIn) {
                 Spacer(GlanceModifier.width(4.dp))
-                Text("+", GlanceModifier.padding(horizontal = 8.dp).clickable(actionRunCallback<AddAction>()),
+                Text("+", GlanceModifier.padding(horizontal = 8.dp).clickable(actionStartActivity(openNook(LocalContext.current, add = true))),
                     style = TextStyle(color = c.primary, fontSize = 22.sp, fontWeight = FontWeight.Bold))
             }
         }
         when {
             !s.signedIn -> Text("Open Nook to sign in", GlanceModifier.padding(top = 8.dp), style = TextStyle(color = c.onSurfaceVariant))
+            !s.synced -> Text("Syncing…", GlanceModifier.padding(top = 8.dp), style = TextStyle(color = c.onSurfaceVariant))
             s.tasks.isEmpty() -> Text("Nothing assigned to you", GlanceModifier.padding(top = 8.dp), style = TextStyle(color = c.onSurfaceVariant))
             else -> LazyColumn(GlanceModifier.fillMaxSize().padding(top = 4.dp)) {
-                items(s.tasks, itemId = { it.id.hashCode().toLong() }) { t ->
+                // Keyed on id + date: a repeating task that moved to its next date is a new row, so its box resets.
+                items(s.tasks, itemId = { ("${it.id}|${it.due}").hashCode().toLong() }) { t ->
                     CheckBox(checked = false, onCheckedChange = actionRunCallback<TickAction>(actionParametersOf(ID to t.id)),
-                        text = t.content, modifier = GlanceModifier.fillMaxWidth().padding(vertical = 2.dp),
+                        text = t.content + (t.due?.let { " · ${shortDate(it)}" } ?: ""), modifier = GlanceModifier.fillMaxWidth().padding(vertical = 2.dp),
                         style = TextStyle(color = c.onSurface, fontSize = 15.sp), maxLines = 2)
                 }
             }
@@ -96,17 +111,22 @@ fun WidgetContent(s: WidgetState) {
     }
 }
 
-/** Redraws every Nook widget (after a sync, a tick in the app, a sign-in or out). */
-suspend fun refreshWidgets(context: Context) = runCatching { MyTasksWidget().updateAll(context) }
+private val DATE = java.time.format.DateTimeFormatter.ofPattern("EEE d MMM", java.util.Locale.ENGLISH)
+fun shortDate(d: String): String = runCatching { java.time.LocalDate.parse(d.take(10)).format(DATE) }.getOrDefault(d)
+
+/** Wakes every Nook widget so it reads fresh data (after a sync when no widget session is running). */
+suspend fun refreshWidgets(context: Context) {
+    try { MyTasksWidget().updateAll(context) }
+    catch (e: kotlinx.coroutines.CancellationException) { throw e }
+    catch (e: Exception) { android.util.Log.w("Nook", "widget refresh failed", e) }
+}
 
 class TickAction : ActionCallback {
     override suspend fun onAction(context: Context, glanceId: GlanceId, parameters: ActionParameters) {
         val app = context.applicationContext as NookApplication
         val id = parameters[ID] ?: return
-        app.widgetActions.tick(id)
-        refreshWidgets(context)
-        app.engine.flush(force = true)      // queued safely if offline; the background flush sends it later
-        refreshWidgets(context)
+        app.widgetActions.tick(id)          // the widget updates itself from the database (live)
+        FlushWorker.sendNow(context)        // the network part runs as background work, not inside this tap
     }
 }
 
@@ -114,21 +134,7 @@ class UndoAction : ActionCallback {
     override suspend fun onAction(context: Context, glanceId: GlanceId, parameters: ActionParameters) {
         val app = context.applicationContext as NookApplication
         app.widgetActions.undo()
-        refreshWidgets(context)
-        app.engine.flush(force = true)
-        refreshWidgets(context)
-    }
-}
-
-class OpenAction : ActionCallback {
-    override suspend fun onAction(context: Context, glanceId: GlanceId, parameters: ActionParameters) {
-        context.startActivity(openNook(context, add = false))
-    }
-}
-
-class AddAction : ActionCallback {
-    override suspend fun onAction(context: Context, glanceId: GlanceId, parameters: ActionParameters) {
-        context.startActivity(openNook(context, add = true))
+        FlushWorker.sendNow(context)
     }
 }
 
@@ -153,5 +159,9 @@ class WidgetRefreshWorker(ctx: Context, params: WorkerParameters) : CoroutineWor
 class MyTasksWidgetReceiver : GlanceAppWidgetReceiver() {
     override val glanceAppWidget: GlanceAppWidget = MyTasksWidget()
     override fun onEnabled(context: Context) { super.onEnabled(context); WidgetRefreshWorker.start(context) }
+    override fun onUpdate(context: Context, manager: android.appwidget.AppWidgetManager, ids: IntArray) {
+        super.onUpdate(context, manager, ids)
+        WidgetRefreshWorker.start(context)   // KEEP: restores the periodic sync if it was ever lost
+    }
     override fun onDisabled(context: Context) { super.onDisabled(context); WidgetRefreshWorker.stop(context) }
 }

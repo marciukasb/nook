@@ -97,6 +97,7 @@ interface NookDao {
     @Upsert suspend fun saveIds(m: List<IdMapE>)
 
     @Query("SELECT value FROM MetaE WHERE `key` = :key") suspend fun meta(key: String): String?
+    @Query("SELECT value FROM MetaE WHERE `key` = :key") fun observeMeta(key: String): Flow<String?>
     @Upsert suspend fun setMeta(m: MetaE)
 }
 

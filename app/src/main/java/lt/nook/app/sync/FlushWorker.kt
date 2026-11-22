@@ -29,6 +29,16 @@ class FlushWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx,
         const val NAME = "flush"
         var engineFor: (Context) -> SyncEngine = { (it.applicationContext as NookApplication).engine }
 
+        /** Right away (expedited when allowed): used after a tick on the widget. Waits for a connection. */
+        fun sendNow(ctx: Context) {
+            val req = OneTimeWorkRequestBuilder<FlushWorker>()
+                .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
+                .setExpedited(androidx.work.OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
+                .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
+                .build()
+            WorkManager.getInstance(ctx).enqueueUniqueWork(NAME, ExistingWorkPolicy.REPLACE, req)
+        }
+
         fun schedule(ctx: Context) {
             val req = OneTimeWorkRequestBuilder<FlushWorker>()
                 .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())

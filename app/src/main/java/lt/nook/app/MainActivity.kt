@@ -42,8 +42,10 @@ class MainActivity : ComponentActivity() {
     private var request by mutableStateOf<OpenRequest?>(null)
 
     private fun readRequest(intent: Intent?) {
-        val tab = intent?.getStringExtra(EXTRA_TAB)?.let { t -> Kind.entries.firstOrNull { it.name == t } } ?: return
+        if (intent == null || intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY != 0) return   // reopened from Recents
+        val tab = intent.getStringExtra(EXTRA_TAB)?.let { t -> Kind.entries.firstOrNull { it.name == t } } ?: return
         request = OpenRequest(tab, intent.getBooleanExtra(EXTRA_ADD, false))
+        intent.removeExtra(EXTRA_TAB); intent.removeExtra(EXTRA_ADD)   // used once
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -65,12 +67,14 @@ class MainActivity : ComponentActivity() {
                 val scope = rememberCoroutineScope()
                 if (!signedIn || settingsOpen) {
                     if (signedIn) BackHandler { settingsOpen = false }
+                    if (request != null) request = null    // a widget tap while signed out / in Settings isn't kept for later
                     Surface(Modifier.fillMaxSize().safeDrawingPadding()) {
                         SignInScreen(app.settings.projectNames(),
                             onTest = { t, n -> testConnection(app.transport, t, n) },
                             onSave = { t, n ->
                                 app.session.signIn(t, n)
                                 signedIn = true; settingsOpen = false
+                                app.signedIn.value = true
                                 scope.launch { app.engine.resetSync(); app.engine.flush(force = true); refreshWidgets(app) }
                             })
                     }
@@ -79,7 +83,10 @@ class MainActivity : ComponentActivity() {
                     LaunchedEffect(Unit) { update = updater.check() }
                     NookApp(app.engine, app.memory,
                         onSettings = { settingsOpen = true },
-                        onSignOut = { scope.launch { app.session.signOut(); signedIn = false; refreshWidgets(app) } },
+                        onSignOut = { scope.launch {
+                            app.widgetActions.clear(); app.session.signOut(); signedIn = false
+                            app.signedIn.value = false; refreshWidgets(app)
+                        } },
                         openRequest = request, onRequestHandled = { request = null },
                         updateBanner = {
                             update?.let { r ->

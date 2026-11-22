@@ -6,6 +6,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.sync.Mutex
@@ -30,6 +31,8 @@ sealed interface Status {
     data object SignInAgain : Status
     data class ProjectsMissing(val names: List<String>) : Status
 }
+
+data class MyTasks(val me: String?, val tasks: List<ItemV>)
 
 data class SyncState(val status: Status = Status.Syncing, val pending: Int = 0, val message: String? = null)
 
@@ -93,15 +96,19 @@ class SyncEngine(
     /** The signed-in person's Todoist id (known after the first sync). */
     suspend fun meId(): String? = dao.meta(USER_ID)
 
-    /** Open Shared tasks assigned to the signed-in person, in the Tasks tab's order (for the home-screen widget). */
-    suspend fun myTasks(): List<ItemV> {
-        val me = dao.meta(USER_ID) ?: return emptyList()
-        val pid = projectId(Kind.TASKS) ?: return emptyList()
-        val rows = dao.itemsOf(pid).filter { !it.hidden }
-        val sections = dao.sectionsOf(pid).map { SectionV(it.id, it.name, it.order) }
-        val views = rows.map { ItemV(it.id, it.content, it.sectionId, it.parentId, it.order, it.responsibleUid, it.dueDate, it.recurring) }
-        return lt.nook.app.core.group(views, sections).flatMap { g -> g.rows.map { it.item } }.filter { it.assignee == me }
+    /** Open Shared tasks assigned to the signed-in person, in the Tasks tab's order (home-screen widget); live.
+     *  me = null until the first sync (or after sign-out). ItemV.assignee holds the person's Todoist id here. */
+    fun myTasksFlow(): Flow<MyTasks> {
+        val name = nameOf(Kind.TASKS)
+        return combine(dao.observeMeta(USER_ID), dao.observeItems(name), dao.observeSections(name)) { me, items, secs ->
+            if (me == null) return@combine MyTasks(null, emptyList())
+            val views = items.map { ItemV(it.id, it.content, it.sectionId, it.parentId, it.order, it.responsibleUid, it.dueDate, it.recurring) }
+            val sections = secs.map { SectionV(it.id, it.name, it.order) }
+            MyTasks(me, lt.nook.app.core.group(views, sections).flatMap { g -> g.rows.map { it.item } }.filter { it.assignee == me })
+        }
     }
+
+    suspend fun myTasks(): List<ItemV> = myTasksFlow().first().tasks
 
     fun sections(kind: Kind): Flow<List<SectionV>> =
         dao.observeSections(nameOf(kind)).map { l -> l.map { SectionV(it.id, it.name, it.order) } }

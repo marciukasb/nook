@@ -200,7 +200,9 @@ fun NookApp(
         }
     }
 
-    if (adding) AddSheet(engine, memory, tab, scope, initialAssignee = addForMe, onDismiss = { adding = false; addForMe = null })
+    if (adding) androidx.compose.runtime.key(tab, addForMe) {   // reopened from the widget: fresh sheet, me preselected
+        AddSheet(engine, memory, tab, scope, initialAssignee = addForMe, onDismiss = { adding = false; addForMe = null })
+    }
     moving?.let { item -> MoveSheet(engine, tab, item, scope, onDismiss = { moving = null }) }
     if (confirmSignOut) AlertDialog(
         onDismissRequest = { confirmSignOut = false },
