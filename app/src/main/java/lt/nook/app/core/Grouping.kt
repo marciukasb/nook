@@ -4,6 +4,7 @@ package lt.nook.app.core
 data class ItemV(
     val id: String, val content: String, val sectionId: String?, val parentId: String?,
     val order: Int, val assignee: String?, val due: String?, val recurring: Boolean,
+    val description: String = "",
 )
 
 data class SectionV(val id: String, val name: String, val order: Int)
