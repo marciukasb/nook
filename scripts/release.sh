@@ -1,7 +1,7 @@
 #!/bin/sh
 # Usage: scripts/release.sh 1.2
 # Bumps versionCode (+1) and versionName, runs the tests, builds the signed APK, commits, tags v<name>-<code>,
-# pushes and publishes a GitHub release with the APK. Phones running Nook pick it up within a day.
+# pushes and publishes a GitHub release with the APK. Phones running Nook offer it within hours.
 set -eu
 cd "$(dirname "$0")/.."
 NAME="${1:?usage: scripts/release.sh <versionName, e.g. 1.2>}"

@@ -34,6 +34,7 @@ fun SignInScreen(
     onTest: suspend (String, Map<Kind, String>) -> TestResult,
     onSave: (String, Map<Kind, String>) -> Unit,
     modifier: Modifier = Modifier,
+    footer: @Composable () -> Unit = {},
 ) {
     var token by remember { mutableStateOf("") }
     var names by remember { mutableStateOf(initialNames) }
@@ -74,5 +75,6 @@ fun SignInScreen(
             TestResult.NoConnection -> Text("No connection — try again", color = MaterialTheme.colorScheme.error)
             null -> if (busy) Text("Checking…")
         }
+        footer()
     }
 }

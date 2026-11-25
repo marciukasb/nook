@@ -32,9 +32,17 @@ fun parseLatest(body: String): Release? = runCatching {
     Release(m.groupValues[2].toInt(), m.groupValues[1], apk.url)
 }.getOrNull()
 
+/** What "Check for updates" found. */
+sealed interface Check {
+    data class Available(val release: Release) : Check
+    data object UpToDate : Check
+    data object Failed : Check
+}
+
 /**
- * Checks the public GitHub repo for a newer Nook at most once a day. Never throws. Android itself refuses an
- * update that isn't signed with the same key, so a release can only come from the owner's signing key.
+ * Checks the public GitHub repo for a newer Nook every few hours; a failed check is retried after minutes. What it found
+ * is remembered, so the banner stays until it's installed (or put off for a day with "Later"). Never throws. Android
+ * itself refuses an update that isn't signed with the same key, so a release can only come from the owner's signing key.
  */
 class Updater(
     private val fetch: suspend (String) -> String?,
@@ -43,21 +51,52 @@ class Updater(
     private val current: Int,
     private val repo: String,
 ) {
-    suspend fun check(force: Boolean = false): Release? {
-        val last = prefs.getLong("last_check", Long.MIN_VALUE)
-        if (!force && last != Long.MIN_VALUE && clock() - last < DAY) return null
-        prefs.edit().putLong("last_check", clock()).apply()
-        val body = runCatching { fetch("https://api.github.com/repos/$repo/releases/latest") }.getOrNull() ?: return null
-        val r = parseLatest(body) ?: return null
-        if (!r.apkUrl.startsWith("https://github.com/$repo/releases/download/")) return null
-        if (r.versionCode <= current || r.versionCode <= prefs.getInt("dismissed", 0)) return null
-        return r
+    /** The newer version found earlier, unless it was put off less than a day ago. No network. */
+    fun pending(): Release? = found()?.takeUnless { it.versionCode == prefs.getInt("later_code", 0) && within("later_at", DAY) }
+
+    /** Asks GitHub if it's time to, then says what to offer. */
+    suspend fun check(): Release? {
+        if (!within("checked_at", EVERY) && !within("tried_at", RETRY)) ask()
+        return pending()
     }
 
-    fun dismiss(r: Release) = prefs.edit().putInt("dismissed", r.versionCode).apply()
+    /** The person asked: always goes to GitHub, and an update that was put off is offered again. */
+    suspend fun checkNow(): Check {
+        if (!ask()) return Check.Failed
+        prefs.edit().remove("later_code").apply()
+        return found()?.let { Check.Available(it) } ?: Check.UpToDate
+    }
+
+    /** "Later": not offered again for a day (a newer one is). */
+    fun later(r: Release) = prefs.edit().putInt("later_code", r.versionCode).putLong("later_at", clock()).apply()
+
+    private suspend fun ask(): Boolean {
+        prefs.edit().putLong("tried_at", clock()).apply()
+        val body = runCatching { fetch("https://api.github.com/repos/$repo/releases/latest") }.getOrNull() ?: return false
+        val r = parseLatest(body)?.takeIf { ours(it.apkUrl) } ?: return false
+        prefs.edit().putLong("checked_at", clock())
+            .putInt("found_code", r.versionCode).putString("found_name", r.name).putString("found_url", r.apkUrl).apply()
+        return true
+    }
+
+    private fun found(): Release? {
+        val code = prefs.getInt("found_code", 0)
+        val url = prefs.getString("found_url", null) ?: return null
+        return if (code > current && ours(url)) Release(code, prefs.getString("found_name", null).orEmpty(), url) else null
+    }
+
+    private fun ours(url: String) = url.startsWith("https://github.com/$repo/releases/download/")
+
+    /** Whether [key] was less than [ms] ago (false if the clock was set back since). */
+    private fun within(key: String, ms: Long): Boolean {
+        val at = prefs.getLong(key, Long.MIN_VALUE)
+        return at != Long.MIN_VALUE && clock() - at in 0 until ms
+    }
 
     companion object {
         const val DAY = 24L * 3600_000
+        const val EVERY = 4L * 3600_000
+        const val RETRY = 5L * 60_000
 
         val http by lazy { OkHttpClient() }
 

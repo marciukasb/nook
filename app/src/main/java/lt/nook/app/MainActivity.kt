@@ -17,7 +17,6 @@ import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -32,6 +31,8 @@ import lt.nook.app.widget.refreshWidgets
 import lt.nook.app.ui.NookApp
 import lt.nook.app.ui.SignInScreen
 import lt.nook.app.ui.UpdateBanner
+import lt.nook.app.ui.UpdateSection
+import lt.nook.app.ui.rememberUpdate
 import lt.nook.app.update.Release
 import lt.nook.app.update.Updater
 
@@ -65,6 +66,8 @@ class MainActivity : ComponentActivity() {
                 var signedIn by remember { mutableStateOf(app.tokens.get() != null) }
                 var settingsOpen by remember { mutableStateOf(false) }
                 val scope = rememberCoroutineScope()
+                var update by rememberUpdate(updater)
+                fun install(r: Release) = scope.launch { Updater.downloadAndInstall(this@MainActivity, r) }
                 if (!signedIn || settingsOpen) {
                     if (signedIn) BackHandler { settingsOpen = false }
                     if (request != null) request = null    // a widget tap while signed out / in Settings isn't kept for later
@@ -76,11 +79,13 @@ class MainActivity : ComponentActivity() {
                                 signedIn = true; settingsOpen = false
                                 app.signedIn.value = true
                                 scope.launch { app.engine.resetSync(); app.engine.flush(force = true); refreshWidgets(app) }
+                            },
+                            footer = {
+                                UpdateSection(BuildConfig.VERSION_NAME, onCheck = { updater.checkNow().also { update = updater.pending() } },
+                                    onInstall = { install(it) })
                             })
                     }
                 } else {
-                    var update by remember { mutableStateOf<Release?>(null) }
-                    LaunchedEffect(Unit) { update = updater.check() }
                     NookApp(app.engine, app.memory,
                         onSettings = { settingsOpen = true },
                         onSignOut = { scope.launch {
@@ -91,8 +96,8 @@ class MainActivity : ComponentActivity() {
                         updateBanner = {
                             update?.let { r ->
                                 UpdateBanner(r,
-                                    onInstall = { scope.launch { Updater.downloadAndInstall(this@MainActivity, r) } },
-                                    onLater = { updater.dismiss(r); update = null })
+                                    onInstall = { install(r) },
+                                    onLater = { updater.later(r); update = null })
                             }
                         })
                 }
