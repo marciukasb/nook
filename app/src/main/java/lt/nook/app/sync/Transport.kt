@@ -14,7 +14,8 @@ sealed class SyncError(msg: String) : Exception(msg) {
     class Auth : SyncError("Token rejected")
     class RateLimited(val retryAfterS: Long?) : SyncError("Rate limited")
     class Server(val code: Int) : SyncError("Server error $code")
-    class Offline : SyncError("No connection")
+    /** [mayHaveArrived]: the connection broke after sending, so Todoist may have done it. */
+    class Offline(val mayHaveArrived: Boolean = false) : SyncError("No connection")
     /** Todoist refused the request itself (400), e.g. an invalid sync token or a malformed command. */
     class BadRequest : SyncError("Bad request")
 }

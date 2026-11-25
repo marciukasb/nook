@@ -110,7 +110,7 @@ fun WidgetContent(s: WidgetState) {
             if (!s.signedIn) Text("My tasks", GlanceModifier.defaultWeight().clickable(actionStartActivity(openNook(context, Kind.TASKS))),
                 style = TextStyle(color = c.onSurface, fontSize = 16.sp, fontWeight = FontWeight.Bold))
             else {
-                ListName(s, Kind.TASKS, "Tasks ${s.tasks.size}", GlanceModifier)
+                ListName(s, Kind.TASKS, "Tasks ${s.tasks.size}", GlanceModifier.defaultWeight())
                 Spacer(GlanceModifier.width(4.dp))
                 ListName(s, Kind.ACHIEVEMENTS, if (s.noProject == null) "Achievements ${s.achievements.size}" else "Achievements", GlanceModifier.defaultWeight())
                 Text("+", GlanceModifier.padding(horizontal = 8.dp).clickable(actionStartActivity(openNook(context, s.selected, add = true))),

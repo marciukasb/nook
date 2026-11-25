@@ -56,7 +56,8 @@ class HttpTransport(
                 }
             }
         } catch (e: IOException) {
-            throw SyncError.Offline()
+            val neverSent = e is java.net.UnknownHostException || e is java.net.ConnectException || e is java.net.NoRouteToHostException
+            throw SyncError.Offline(mayHaveArrived = !neverSent)
         } catch (e: kotlinx.serialization.SerializationException) {
             throw SyncError.Server(0)
         }

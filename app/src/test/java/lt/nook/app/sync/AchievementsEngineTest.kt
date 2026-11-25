@@ -267,4 +267,104 @@ class AchievementsEngineTest {
         assertEquals(listOf("Home"), e.moveTargets(Kind.ACHIEVEMENTS).first().map { it.name })
         assertEquals(listOf("Done"), e.moveTargets(Kind.GROCERIES).first().map { it.name })
     }
+
+    // ---- review fixes ----
+
+    @Test fun tickingNeverOverwritesTextFromAnotherDevice() = runTest {
+        val (e, id) = ready("x")
+        fake.describeElsewhere(id, "long text from the other phone")
+        e.achieve(id, day)                                       // this phone hasn't seen the new text
+        assertEquals("long text from the other phone\nDone: 25 Nov 2026", fake.get(id)!!.description)
+        fake.describeElsewhere(id, "even longer\nDone: 25 Nov 2026")
+        e.reopen(id)
+        assertEquals(listOf(null, "even longer"), fake.get(id)!!.let { listOf(it.sectionId, it.description) })
+        val u = e.achieved(id, sync = false)
+        e.flush(force = true)
+        fake.describeElsewhere(id, "third\nDone: 25 Nov 2026")
+        e.undoAchieve(u)
+        assertEquals(listOf(null, "third"), fake.get(id)!!.let { listOf(it.sectionId, it.description) })
+        assertEquals("third", e.list().single().description)
+    }
+
+    @Test fun offlineTick_thenTextElsewhere_thenRestart() = runTest {
+        val (e, id) = ready("x")
+        fake.failNext(SyncError.Offline())
+        e.achieve(id, day)
+        fake.describeElsewhere(id, "new")
+        engine().flush(force = true)
+        assertEquals("new\nDone: 25 Nov 2026", fake.get(id)!!.description)
+    }
+
+    @Test fun killedBetweenMoveAndDate_usesTheNewestText() = runTest {
+        val (e, id) = ready("x")
+        e.achieve(id, day, sync = false)
+        fake.failAtCall = fake.calls + 2                          // the move got through, the date did not
+        e.flush(force = true)
+        fake.failAtCall = -1
+        assertEquals("x", fake.get(id)!!.description)
+        fake.describeElsewhere(id, "new")
+        engine().flush(force = true)
+        assertEquals("new\nDone: 25 Nov 2026", fake.get(id)!!.description)
+    }
+
+    @Test fun ownUnsentTextStaysWithTheDate() = runTest {
+        val (e, id) = ready("x")
+        e.achieve(id, day, sync = false)
+        e.describe(id, "mine", sync = false)
+        e.flush(force = true)
+        assertEquals("mine\nDone: 25 Nov 2026", fake.get(id)!!.description)
+        assertEquals(0, db.dao().pendingCount())
+    }
+
+    @Test fun undoWhenOnlyTheAnswerWasLost() = runTest {
+        val (e, id) = ready("x")
+        fake.dropNextResponseAfterApply()
+        val u = e.achieved(id)                                    // Todoist moved it, but Nook never heard
+        e.undoAchieve(u)
+        assertEquals(listOf(null, "x"), fake.get(id)!!.let { listOf(it.sectionId, it.description) })
+        assertTrue(e.achievements().first().done.isEmpty())
+    }
+
+    @Test fun undoOfATickWhenOnlyTheAnswerWasLost() = runTest {
+        val id = fake.item(fake.tasks, "Call plumber")
+        val e = engine(); e.flush()
+        fake.dropNextResponseAfterApply()
+        val r = e.tick(id) as TickResult.Hidden
+        e.undo(r.undo)
+        assertFalse(fake.get(id)!!.checked)
+        assertEquals(listOf("Call plumber"), e.items(Kind.TASKS).first().map { it.content })
+    }
+
+    @Test fun doneDeletedElsewhere_saysWhatHappened_andLeavesNoDate() = runTest {
+        fake.addAchievementsProject()
+        val done = fake.section(fake.achievements, "Done")
+        val id = fake.item(fake.achievements, "Weld", description = "x")
+        val e = engine(); e.flush()
+        fake.deleteSection(done)
+        e.achieve(id, day)
+        assertEquals("Couldn't move Weld", e.state.value.message)
+        assertEquals("x", fake.get(id)!!.description)
+        assertEquals(listOf("Weld"), e.achievements().first().open.flatMap { it.rows }.map { it.item.content })
+        e.clearMessage()
+        e.achieve(id, day)                                        // now it makes a new Done
+        assertEquals(listOf(doneId(), "x\nDone: 25 Nov 2026"), fake.get(id)!!.let { listOf(it.sectionId, it.description) })
+        assertNull(e.state.value.message)
+    }
+
+    @Test fun rejectedMove_leavesNoDate() = runTest {
+        val (e, id) = ready("x")
+        fake.reject400 = { l -> l.any { it.type == "item_move" } }
+        e.achieve(id, day)
+        assertEquals("Couldn't save Weld", e.state.value.message)
+        assertEquals("x", fake.get(id)!!.description)
+        assertEquals(0, db.dao().pendingCount())
+    }
+
+    @Test fun refusedText_isNotCalledRemoved() = runTest {
+        val (e, id) = ready("x")
+        fake.refuseUpdate = "Description too long"
+        e.describe(id, "y")
+        assertEquals("Couldn't save the description of Weld", e.state.value.message)
+        assertEquals("x", e.list().single().description)
+    }
 }

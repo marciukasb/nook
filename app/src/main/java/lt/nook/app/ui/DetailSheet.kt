@@ -26,6 +26,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -42,7 +43,6 @@ import kotlinx.coroutines.launch
 import lt.nook.app.core.ItemV
 import lt.nook.app.core.MAX_DESCRIPTION
 import lt.nook.app.core.dateText
-import lt.nook.app.core.splitDescription
 import lt.nook.app.core.text
 import lt.nook.app.data.Kind
 import lt.nook.app.sync.SyncEngine
@@ -60,6 +60,8 @@ fun DetailSheet(engine: SyncEngine, id: String, scope: CoroutineScope, onUnsaved
     var base by rememberSaveable(id) { mutableStateOf("") }
     var text by rememberSaveable(id) { mutableStateOf("") }
     var asking by remember { mutableStateOf(false) }
+
+    val lists by remember { engine.achievements() }.collectAsState(initial = null)
 
     LaunchedEffect(id) {
         engine.item(Kind.ACHIEVEMENTS, id).collect { now ->
@@ -90,7 +92,7 @@ fun DetailSheet(engine: SyncEngine, id: String, scope: CoroutineScope, onUnsaved
                 IconButton({ close() }) { Icon(Icons.Filled.Close, "Close") }
             }
             item?.let { i ->
-                val day = splitDescription(i.description).second
+                val day = lists?.done?.firstOrNull { it.item.id == i.id }?.date
                 Text(listOfNotNull(i.assignee ?: "Anyone", day?.let { "Done ${dateText(it)}" }).joinToString(" · "),
                     Modifier.testTag("detailWho"), maxLines = 1, overflow = TextOverflow.Ellipsis,
                     style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)

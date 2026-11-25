@@ -92,6 +92,8 @@ class SyncEngine(
     /** Guards the queue against an in-flight batch (short holds only, never across a network call). */
     private val stateLock = Mutex()
     private val inflight = HashSet<String>()
+    /** Queued commands Todoist may have received although no answer came: undoing needs the reverse command. */
+    private val sent = HashSet<String>()
     private var failures = 0
     private var nextAttempt = 0L
     private var needResync = false
@@ -236,7 +238,7 @@ class SyncEngine(
     suspend fun undo(token: UndoToken, sync: Boolean = true) {
         val cancelled = stateLock.withLock {
             // Not sent yet (offline): just forget the close.
-            val waiting = token.closeUuid !in inflight && dao.allPending().any { it.uuid == token.closeUuid }
+            val waiting = token.closeUuid !in inflight && token.closeUuid !in sent && dao.allPending().any { it.uuid == token.closeUuid }
             val rows = token.rows.map { r -> val real = resolve(r.id); r.copy(id = real, parentId = r.parentId?.let { resolve(it) }, hidden = false) }
             db.withTransaction {
                 if (waiting) dao.deletePending(listOf(token.closeUuid))
@@ -279,7 +281,7 @@ class SyncEngine(
                 if (isDone(item)) return@withTransaction null
                 val done = doneSection(item.projectId)
                 val text = joinDescription(item.description, today)
-                val cs = listOf(moveItem(item.id, done, item.projectId), updateDescription(item.id, text))
+                val cs = listOf(moveItem(item.id, done, item.projectId), dateChange(item.id))
                 dao.upsertItems(listOf(item.copy(sectionId = done, parentId = null, description = text)))
                 cs.forEach { queue(it, item.id, item.content) }
                 AchieveUndo(item, cs.map { it.uuid })
@@ -296,7 +298,7 @@ class SyncEngine(
                 val item = dao.item(resolve(u.before.id)) ?: return@withTransaction true
                 val own = dao.allPending().filter { it.targetId == item.id }.map { it.uuid }
                 // Nothing sent and nothing done since: just forget both changes.
-                val waiting = u.uuids.none { it in inflight } && own.takeLast(u.uuids.size) == u.uuids
+                val waiting = u.uuids.none { it in inflight || it in sent } && own.takeLast(u.uuids.size) == u.uuids
                 if (waiting) dao.deletePending(u.uuids)
                 restore(item, u.before.sectionId?.let { resolve(it) }, splitDescription(u.before.description).second, send = !waiting)
                 waiting
@@ -321,7 +323,7 @@ class SyncEngine(
         dao.upsertItems(listOf(item.copy(sectionId = sectionId, description = text)))
         if (!send) return
         queue(moveItem(item.id, sectionId, item.projectId), item.id, item.content)
-        queue(updateDescription(item.id, text), item.id, item.content)
+        queue(dateChange(item.id), item.id, item.content)
     }
 
     /** Replaces the text of a description; its date line stays. False (with a message) when it is too long. */
@@ -404,7 +406,7 @@ class SyncEngine(
         flushLock.withLock {
             stateLock.withLock {
                 block()
-                failures = 0; nextAttempt = 0; needResync = false
+                failures = 0; nextAttempt = 0; needResync = false; sent.clear()
             }
         }
         _state.value = SyncState(status = Status.SignInAgain)
@@ -417,19 +419,22 @@ class SyncEngine(
         _state.update { it.copy(status = Status.Syncing) }
         var rounds = 0
         var single = false          // after a 400 with a full sync token: send one command at a time
+        var fresh = false           // something was fetched during this flush
         val messages = mutableListOf<String>()
         while (rounds++ < 30) {
+            var added = emptyList<String>()
             val (batch, commands) = stateLock.withLock {
-                val b = dao.pending(if (single) 1 else MAX_COMMANDS)
-                val cs = b.map { withKnownIds(decodeCommand(it.json)) }
+                val b = nextBatch(fresh, if (single) 1 else MAX_COMMANDS)
+                val cs = b.map { p -> decodeCommand(p.json).let { if (it.type == DATE_CHANGE) withNewestText(it) else withKnownIds(it) } }
                 inflight += cs.map { it.uuid }
+                added = cs.map { it.uuid }.filter { sent.add(it) }
                 b to cs
             }
             val syncToken = dao.meta(SYNC_TOKEN) ?: "*"
             val resp = try {
                 transport.sync(tok, syncToken, commands)
             } catch (e: SyncError.BadRequest) {
-                stateLock.withLock { inflight.clear() }
+                stateLock.withLock { inflight.clear(); sent -= added.toSet() }
                 when {
                     syncToken != "*" -> { dao.setMeta(MetaE(SYNC_TOKEN, "*")); continue }
                     commands.size > 1 -> { single = true; continue }
@@ -437,7 +442,7 @@ class SyncEngine(
                         val p = batch.single()
                         db.withTransaction {
                             dao.deletePending(listOf(p.uuid))
-                            p.targetId?.let { dropOptimistic(it, commands.single()) }
+                            p.targetId?.let { dropOptimistic(it, commands.single()); if (commands.single().type == "item_move") dropDates(it) }
                         }
                         messages += "Couldn't save ${p.label ?: "a change"}"
                         continue
@@ -445,12 +450,14 @@ class SyncEngine(
                     else -> { fail(SyncError.Server(400)); report(messages); return }
                 }
             } catch (e: SyncError) {
-                stateLock.withLock { inflight.clear() }
+                val arrived = e is SyncError.Server || e is SyncError.Offline && e.mayHaveArrived
+                stateLock.withLock { inflight.clear(); if (!arrived) sent -= added.toSet() }
                 fail(e); report(messages); return
             }
             val failed = stateLock.withLock {
                 try { apply(resp, batch, commands) } finally { inflight.clear() }
             }
+            fresh = true
             failures = 0; nextAttempt = 0
             messages += failed
             if (needResync) { needResync = false; continue }
@@ -461,6 +468,23 @@ class SyncEngine(
         _state.update { it.copy(status = missingProjects()?.let { m -> Status.ProjectsMissing(m) } ?: Status.Synced) }
     }
 
+    /** Date changes go last, and only after a fetch: by then every queued move was answered and the texts are the newest. */
+    private suspend fun nextBatch(fresh: Boolean, max: Int): List<PendingE> {
+        val (dates, rest) = dao.allPending().partition { decodeCommand(it.json).type == DATE_CHANGE }
+        val (live, gone) = dates.partition { p -> p.targetId?.let { dao.item(it) } != null }
+        dao.deletePending(gone.map { it.uuid })
+        return rest.ifEmpty { if (fresh) live else emptyList() }.take(max)
+    }
+
+    private suspend fun withNewestText(c: Command): Command {
+        val id = resolve(c.arg("id")!!)
+        return updateDescription(id, dao.item(id)!!.description).copy(uuid = c.uuid)
+    }
+
+    /** The move failed, so the date that went with it must not be written. */
+    private suspend fun dropDates(target: String) =
+        dao.deletePending(dao.allPending().filter { it.targetId == target && decodeCommand(it.json).type == DATE_CHANGE }.map { it.uuid })
+
     private fun report(messages: List<String>) {
         if (messages.isNotEmpty()) _state.update { it.copy(message = messages.distinct().joinToString("\n")) }
     }
@@ -470,11 +494,16 @@ class SyncEngine(
         if (c.type == "section_add") dao.deleteSections(listOf(target))
     }
 
-    private fun failureText(c: Command, label: String?): String {
+    private fun failureText(c: Command, label: String?, r: CommandResult.Failed): String {
         val name = label ?: "an item"
         return when (c.type) {
             "item_add" -> if (c.arg("section_id") != null) "Couldn't add $name — its category was deleted" else "Couldn't add $name"
             "section_add" -> "Couldn't create category $name"
+            "item_move", "item_update" -> when {
+                r.message.contains("item not found", ignoreCase = true) -> "$name was already removed"
+                c.type == "item_move" -> "Couldn't move $name"
+                else -> "Couldn't save the description of $name"
+            }
             else -> "$name was already removed"
         }
     }
@@ -503,7 +532,7 @@ class SyncEngine(
             val done = mutableListOf<String>()
             var resync = false
             batch.zip(commands).forEach { (p, c) ->
-                when (resp.result(c.uuid)) {
+                when (val r = resp.result(c.uuid)) {
                     CommandResult.Ok -> {
                         done += c.uuid
                         // A replayed add (its first response was lost) comes back "ok" without a temp id mapping:
@@ -515,14 +544,15 @@ class SyncEngine(
                     }
                     is CommandResult.Failed -> {
                         done += c.uuid
-                        failed += failureText(c, p.label)
+                        failed += failureText(c, p.label, r)
                         // Drop the optimistic row; the full resync brings back whatever really exists.
-                        (map[p.targetId] ?: p.targetId)?.let { dropOptimistic(it, c) }
+                        (map[p.targetId] ?: p.targetId)?.let { dropOptimistic(it, c); if (c.type == "item_move") dropDates(it) }
                     }
                     null -> {}
                 }
             }
             dao.deletePending(done)
+            sent -= done.toSet()
             val protected = dao.allPending().mapNotNull { it.targetId }.toSet()
             if (merge(resp, protected)) resync = true
             dao.setMeta(MetaE(SYNC_TOKEN, if (failed.isEmpty() && !resync) resp.syncToken else "*"))
@@ -598,8 +628,16 @@ class SyncEngine(
         val sectionNames = ours.flatMap { dao.sectionsOf(it) }.associate { it.id to it.name }
         val kinds = Kind.entries.associateBy(::nameOf)
         val projectName = dao.projects().associate { it.id to it.name }
+        val queued = dao.allPending().groupBy({ it.targetId }, { decodeCommand(it.json).type })
         resp.items.forEach { i ->
-            if (i.id in protected) return@forEach
+            if (i.id in protected) {
+                // Unsent changes stay, but a text written elsewhere is taken over unless ours is waiting too.
+                val types = queued[i.id].orEmpty()
+                val mine = dao.item(i.id)
+                if (mine != null && !i.checked && !i.isDeleted && "item_update" !in types) dao.upsertItems(listOf(mine.copy(description =
+                    if (DATE_CHANGE in types) joinDescription(i.description, splitDescription(mine.description).second) else i.description)))
+                return@forEach
+            }
             if (i.checked || i.isDeleted || i.projectId !in ours) { dao.deleteItems(listOf(i.id)); return@forEach }
             dao.upsertItems(listOf(ItemE(i.id, i.projectId, i.sectionId, i.parentId, i.content, i.childOrder,
                 i.responsibleUid, i.due?.date, i.due?.string, i.due?.isRecurring == true, description = i.description)))

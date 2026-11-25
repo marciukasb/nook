@@ -101,13 +101,13 @@ fun NookApp(
     onRequestHandled: () -> Unit = {},
 ) {
     var tab by rememberSaveable { mutableStateOf(Kind.GROCERIES) }
-    var adding by remember { mutableStateOf(false) }
-    var addForMe by remember { mutableStateOf<String?>(null) }
+    var adding by rememberSaveable { mutableStateOf(false) }
+    var addForMe by rememberSaveable { mutableStateOf<String?>(null) }
     var detail by rememberSaveable { mutableStateOf<String?>(null) }
-    var unsaved by remember { mutableStateOf(false) }
+    var unsaved by rememberSaveable { mutableStateOf(false) }      // a description is being written (details or add sheet)
     LaunchedEffect(openRequest) {   // from the home-screen widget: a tab, maybe adding for me or one item's details
         val r = openRequest ?: return@LaunchedEffect
-        if (detail != null && unsaved) { onRequestHandled(); return@LaunchedEffect }   // text being written stays on the screen
+        if (unsaved) { onRequestHandled(); return@LaunchedEffect }   // text being written stays on the screen
         detail = r.itemId
         tab = r.tab
         if (r.add) { addForMe = engine.meId(); adding = true }
@@ -227,7 +227,8 @@ fun NookApp(
     }
 
     if (adding) androidx.compose.runtime.key(tab, addForMe) {   // reopened from the widget: fresh sheet, me preselected
-        AddSheet(engine, memory, tab, scope, initialAssignee = addForMe, onDismiss = { adding = false; addForMe = null })
+        AddSheet(engine, memory, tab, scope, initialAssignee = addForMe, onUnsaved = { unsaved = it },
+            onDismiss = { adding = false; addForMe = null; unsaved = false })
     }
     moving?.let { item -> MoveSheet(engine, tab, item, scope, onDismiss = { moving = null }) }
     if (confirmSignOut) AlertDialog(

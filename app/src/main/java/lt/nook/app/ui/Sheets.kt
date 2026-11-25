@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -20,6 +21,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -27,6 +29,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
@@ -54,13 +57,13 @@ import lt.nook.app.sync.SyncEngine
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun AddSheet(engine: SyncEngine, memory: CategoryMemory, kind: Kind, scope: CoroutineScope,
-             initialAssignee: String? = null, onDismiss: () -> Unit) {
-    var text by remember { mutableStateOf("") }
+             initialAssignee: String? = null, onUnsaved: (Boolean) -> Unit = {}, onDismiss: () -> Unit) {
+    var text by rememberSaveable { mutableStateOf("") }
     var hint by remember { mutableStateOf<String?>(null) }
     var pick by remember { mutableStateOf(false) }
     var newCat by remember { mutableStateOf(false) }
     var newCatName by remember { mutableStateOf("") }
-    var assignee by remember { mutableStateOf(initialAssignee) }
+    var assignee by rememberSaveable { mutableStateOf(initialAssignee) }
     var suggestions by remember { mutableStateOf(emptyList<Known>()) }
     val sections by remember(kind) { engine.sections(kind) }.collectAsState(initial = emptyList())
     val items by remember(kind) { engine.items(kind) }.collectAsState(initial = emptyList())
@@ -68,7 +71,10 @@ fun AddSheet(engine: SyncEngine, memory: CategoryMemory, kind: Kind, scope: Coro
     val focus = remember { FocusRequester() }
     val lists = kind == Kind.GROCERIES || kind == Kind.SHOPPING
     val achievement = kind == Kind.ACHIEVEMENTS
-    var description by remember { mutableStateOf("") }
+    var description by rememberSaveable { mutableStateOf("") }
+    var asking by remember { mutableStateOf(false) }
+    val writing = description.isNotBlank()
+    LaunchedEffect(writing) { onUnsaved(writing) }
     suspend fun notLoaded() = if (achievement && engine.hasProject(kind).first() == false) engine.noProjectText(kind) else SyncEngine.NOT_LOADED
 
     LaunchedEffect(text) { if (!achievement) suggestions = memory.suggestions(kind, text) }
@@ -105,7 +111,15 @@ fun AddSheet(engine: SyncEngine, memory: CategoryMemory, kind: Kind, scope: Coro
 
     fun submit() { val n = text.trim(); if (n.isNotEmpty() && tooLong(description) == null) place(n) }
 
-    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
+    val sheet = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    if (asking) AlertDialog(
+        onDismissRequest = { asking = false; scope.launch { sheet.show() } },
+        title = { Text("Discard the description?") },
+        text = { Text("This achievement isn't added yet.") },
+        confirmButton = { TextButton({ asking = false; scope.launch { sheet.show() } }) { Text("Keep writing") } },
+        dismissButton = { TextButton({ asking = false; onDismiss() }) { Text("Discard") } },
+    )
+    ModalBottomSheet(onDismissRequest = { if (writing) asking = true else onDismiss() }, sheetState = sheet) {
         Column(Modifier.padding(horizontal = 16.dp).padding(bottom = 24.dp).imePadding(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("Add to ${kind.title}", style = MaterialTheme.typography.titleMedium)
             OutlinedTextField(

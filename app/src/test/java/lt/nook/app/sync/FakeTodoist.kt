@@ -26,6 +26,9 @@ class FakeTodoist : Transport {
 
     private var failNext: SyncError? = null
     private var dropAfterApply = false
+    /** The sync call (counted in [calls]) that gets no connection. */
+    var failAtCall = -1
+    var refuseUpdate: String? = null
     var completedError: SyncError? = null
     /** Makes Todoist answer 400 for any request whose commands match. */
     var reject400: ((List<Command>) -> Boolean)? = null
@@ -70,6 +73,7 @@ class FakeTodoist : Transport {
         calls++
         if (token != this.token) throw SyncError.Auth()
         failNext?.let { failNext = null; throw it }
+        if (calls == failAtCall) throw SyncError.Offline()
         if (reject400?.invoke(commands) == true) throw SyncError.BadRequest()
         require(commands.size <= MAX_COMMANDS)
         received += commands
@@ -84,7 +88,7 @@ class FakeTodoist : Transport {
             applied += raw.uuid
         }
         tempIds.putAll(mapping)
-        if (dropAfterApply) { dropAfterApply = false; throw SyncError.Offline() }
+        if (dropAfterApply) { dropAfterApply = false; throw SyncError.Offline(mayHaveArrived = true) }
         val since = syncToken.removePrefix("v").toIntOrNull()
         val full = since == null
         return SyncResponse(
@@ -125,11 +129,13 @@ class FakeTodoist : Transport {
             "item_move" -> {
                 val i = live(c.arg("id")) ?: return "Item not found"
                 val sec = c.arg("section_id")
+                if (sec != null && sections[sec]?.first?.isDeleted != false) return "Section not found"
                 items[i.id] = (if (sec != null) i.copy(sectionId = sec) else i.copy(sectionId = null, projectId = c.arg("project_id")!!)) to ++rev
             }
             "item_update" -> {
                 if (c.args.keys != setOf("id", "description")) return "Only descriptions may be updated"
                 val i = live(c.arg("id")) ?: return "Item not found"
+                refuseUpdate?.let { return it }
                 items[i.id] = i.copy(description = c.arg("description")!!) to ++rev
             }
             else -> return "Unknown command"

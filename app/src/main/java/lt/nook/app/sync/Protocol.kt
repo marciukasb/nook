@@ -126,6 +126,13 @@ fun uncompleteItem(id: String) = Command("item_uncomplete", newId(), null, build
 /** The only edit Nook makes to an item: its description. */
 fun updateDescription(id: String, text: String) = Command("item_update", newId(), null, buildJsonObject { put("id", id); put("description", text) })
 
+/**
+ * Queued only, never sent as it is: "the date line of this item's description changed". It becomes an [updateDescription]
+ * when it is sent, after a fetch, so it carries the newest text and never overwrites what was written elsewhere.
+ */
+const val DATE_CHANGE = "nook_date_change"
+fun dateChange(id: String) = Command(DATE_CHANGE, newId(), null, buildJsonObject { put("id", id) })
+
 fun moveItem(id: String, sectionId: String?, projectId: String) = Command(
     "item_move", newId(), null,
     buildJsonObject { put("id", id); if (sectionId != null) put("section_id", sectionId) else put("project_id", projectId) })

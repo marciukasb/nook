@@ -35,7 +35,8 @@ import org.robolectric.RobolectricTestRunner
 @OptIn(ExperimentalTestApi::class)
 @RunWith(RobolectricTestRunner::class)
 class ListsUiTest {
-    @get:Rule val rule = createComposeRule()
+    // Effects run on the main thread, as in the real app (the default continues them on Room's threads).
+    @get:Rule val rule = createComposeRule(kotlinx.coroutines.test.StandardTestDispatcher())
     private lateinit var db: NookDb
     private val fake = FakeTodoist()
     private lateinit var engine: SyncEngine
@@ -50,7 +51,8 @@ class ListsUiTest {
             { mapOf(Kind.GROCERIES to "Groceries", Kind.SHOPPING to "Shopping", Kind.TASKS to "Shared tasks") }, { now }, memory)
     }
     @After fun down() {
-        runBlocking { engine.flush(force = true) }   // let any in-flight sync finish before closing the database
+        // Let any sync the screen started finish before closing the database.
+        runCatching { rule.waitUntil(2_000) { rule.waitForIdle(); engine.state.value.status != lt.nook.app.sync.Status.Syncing } }
         db.close()
     }
 

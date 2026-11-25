@@ -1,6 +1,6 @@
 # Nook
 
-Android app for the household's Todoist lists: **Groceries**, **Shopping**, **Tasks** — three tabs, nothing else.
+Android app for the household's Todoist lists: **Groceries**, **Shopping**, **Tasks**, **Achievements** — four tabs, nothing else.
 Todoist stores everything; Nook is only a nicer front end. Design: `docs/superpowers/specs/2026-11-21-nook-design.md`.
 
 ## Build (Mac)

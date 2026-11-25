@@ -5,6 +5,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.ExperimentalTestApi
+import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertTextContains
@@ -18,6 +19,7 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTextReplacement
+import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTouchInput
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
@@ -105,8 +107,7 @@ class AchievementsUiTest {
         waitText("Weld")
         rule.onNodeWithContentDescription("Tick Weld").performClick()
         waitText("Achieved: Weld")
-        waitFor { isDone(id) }
-        assertTrue(fake.get(id)!!.description.startsWith("x\nDone: "))
+        waitFor { isDone(id) && fake.get(id)!!.description.startsWith("x\nDone: ") }
         rule.onNodeWithText("Undo").performClick()
         waitFor { !isDone(id) && fake.get(id)!!.description == "x" }
     }
@@ -282,5 +283,88 @@ class AchievementsUiTest {
         field().assertTextContains("typed")
         rule.onNodeWithTag("detailSave").performClick()
         waitFor { fake.get(other)!!.description == "typed" }
+    }
+
+    private fun openAdd() { rule.onNodeWithContentDescription("Add").performClick(); waitFor { rule.onAllNodesWithTag("addDescription").fetchSemanticsNodes().isNotEmpty() } }
+    private fun dismissSheet() = rule.onNode(androidx.compose.ui.test.SemanticsMatcher.keyIsDefined(androidx.compose.ui.semantics.SemanticsActions.Dismiss))
+        .performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.Dismiss)
+    private fun sheetGone() = waitFor { rule.onAllNodesWithTag("addField").fetchSemanticsNodes().isEmpty() }
+
+    @Test fun addSheet_asksBeforeLosingADescription() {
+        start()
+        openAdd()
+        rule.onNodeWithTag("addDescription").performTextInput("A long story")
+        dismissSheet()
+        waitText("Discard the description?")
+        rule.onNodeWithText("Keep writing").performClick()
+        waitGone("Discard the description?")
+        rule.onNodeWithTag("addDescription").assertIsDisplayed()
+        rule.onNodeWithTag("addDescription").assertTextContains("A long story")
+        dismissSheet()
+        waitText("Discard the description?")
+        rule.onNodeWithText("Discard").performClick()
+        sheetGone()
+        openAdd()
+        rule.onNodeWithTag("addDescription").assertTextContains("")
+        dismissSheet()
+        sheetGone()                                                // nothing written: just closes
+    }
+
+    @Test fun addSheet_widgetTapNeverDropsADescription() {
+        start()
+        openAdd()
+        rule.onNodeWithTag("addDescription").performTextInput("A long story")
+        rule.runOnIdle { request = OpenRequest(Kind.TASKS, add = true) }
+        rule.waitForIdle()
+        rule.onNodeWithTag("addDescription").assertTextContains("A long story")
+        assertTrue(request == null)
+    }
+
+    @Test fun addSheet_textSurvivesRotation() {
+        fake.addAchievementsProject()
+        runBlocking { engine.flush() }
+        val tester = androidx.compose.ui.test.junit4.StateRestorationTester(rule)
+        tester.setContent { NookApp(engine, memory, onSettings = {}, onSignOut = {}, autoRefresh = false) }
+        rule.onNodeWithText("Achievements").performClick()
+        openAdd()
+        rule.onNodeWithTag("addField").performTextInput("Run")
+        rule.onNodeWithTag("addDescription").performTextInput("A long story")
+        rule.waitForIdle()
+        tester.emulateSavedInstanceStateRestore()
+        waitFor { rule.onAllNodesWithTag("addDescription").fetchSemanticsNodes().isNotEmpty() }
+        rule.onNodeWithTag("addField").assertTextContains("Run")
+        rule.onNodeWithTag("addDescription").assertTextContains("A long story")
+    }
+
+    @Test fun detailText_survivesRotation_andAWidgetTapAfterIt() {
+        fake.addAchievementsProject()
+        fake.item(fake.achievements, "Weld", description = "x")
+        val other = fake.item(fake.achievements, "Run", description = "y")
+        runBlocking { engine.flush() }
+        val tester = androidx.compose.ui.test.junit4.StateRestorationTester(rule)
+        tester.setContent { NookApp(engine, memory, onSettings = {}, onSignOut = {}, autoRefresh = false,
+            openRequest = request, onRequestHandled = { request = null }) }
+        rule.onNodeWithText("Achievements").performClick()
+        openDetails("Weld")
+        field().performTextReplacement("typed")
+        rule.waitForIdle()
+        request = OpenRequest(Kind.ACHIEVEMENTS, add = false, itemId = other)
+        tester.emulateSavedInstanceStateRestore()
+        waitFor { rule.onAllNodesWithTag("detailText").fetchSemanticsNodes().isNotEmpty() }
+        field().assertTextContains("typed")
+    }
+
+    @Test fun openItemWithADateLine_isNotCalledDone() {
+        start { fake.item(fake.achievements, "Weld", responsible = fake.me, description = "x\nDone: 5 Nov 2026") }
+        openDetails("Weld")
+        rule.onNodeWithTag("detailWho").assertTextContains("Alex")
+    }
+
+    @Test fun doneItem_showsItsDate() {
+        start { fake.item(fake.achievements, "Paint", fake.section(fake.achievements, "Done"), responsible = fake.me, description = "Done: 5 Nov 2026") }
+        waitText("Done · 1")
+        rule.onNodeWithText("Done · 1").performClick()
+        openDetails("Paint")
+        rule.onNodeWithTag("detailWho").assertTextContains("Alex · Done 5 Nov 2026")
     }
 }
