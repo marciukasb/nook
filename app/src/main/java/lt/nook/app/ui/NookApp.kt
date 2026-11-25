@@ -6,6 +6,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.foundation.layout.Column
@@ -58,6 +59,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.repeatOnLifecycle
@@ -65,7 +67,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import lt.nook.app.core.Group
 import lt.nook.app.core.ItemV
-import lt.nook.app.core.Row as ItemRow
 import lt.nook.app.core.group
 import lt.nook.app.data.CategoryMemory
 import lt.nook.app.data.Kind
@@ -86,7 +87,7 @@ private val nextFmt = DateTimeFormatter.ofPattern("EEE d MMM", Locale.ENGLISH)
 fun nextDateText(date: String?): String =
     date?.let { runCatching { "Next: " + LocalDate.parse(it.take(10)).format(nextFmt) }.getOrNull() } ?: "Moved to its next date"
 
-/** The whole app once signed in: three tabs, a floating + and nothing else. */
+/** The whole app once signed in: four tabs, a floating + and nothing else. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun NookApp(
@@ -102,10 +103,12 @@ fun NookApp(
     var tab by rememberSaveable { mutableStateOf(Kind.GROCERIES) }
     var adding by remember { mutableStateOf(false) }
     var addForMe by remember { mutableStateOf<String?>(null) }
-    LaunchedEffect(openRequest) {   // from the home-screen widget: the Tasks tab, maybe adding a task for me
+    var detail by rememberSaveable { mutableStateOf<String?>(null) }
+    LaunchedEffect(openRequest) {   // from the home-screen widget: a tab, maybe adding for me or one item's details
         val r = openRequest ?: return@LaunchedEffect
         tab = r.tab
         if (r.add) { addForMe = engine.meId(); adding = true }
+        r.itemId?.let { detail = it }
         onRequestHandled()
     }
     var moving by remember { mutableStateOf<ItemV?>(null) }
@@ -129,10 +132,10 @@ fun NookApp(
 
     fun sync() = scope.launch { engine.flush(force = true) }
 
-    fun doTick(item: ItemV) = scope.launch {
+    fun tickResult(item: ItemV, tick: suspend () -> TickResult) = scope.launch {
         // Normal items: the row goes and Undo shows at once; the network happens in the background.
         // Repeating tasks wait for the sync so the snackbar can name the next date (the row stays meanwhile).
-        when (val r = engine.tick(item.id, sync = item.recurring)) {
+        when (val r = tick()) {
             is TickResult.Hidden -> {
                 sync()
                 snack.currentSnackbarData?.dismiss()
@@ -147,16 +150,27 @@ fun NookApp(
                 snack.currentSnackbarData?.dismiss()
                 snack.showSnackbar(nextDateText(r.nextDate))
             }
-            is TickResult.Achieved, TickResult.NotFound -> {}
+            is TickResult.Achieved -> {
+                sync()
+                snack.currentSnackbarData?.dismiss()
+                val res = snack.showSnackbar("Achieved: ${item.content}", "Undo", duration = SnackbarDuration.Short)
+                if (res == SnackbarResult.ActionPerformed) { engine.undoAchieve(r.undo, sync = false); sync() }
+            }
+            TickResult.NotFound -> {}
         }
     }
+
+    fun doTick(item: ItemV) = tickResult(item) { engine.tick(item.id, sync = item.recurring) }
 
     fun onTick(item: ItemV) = scope.launch {
         val kids = engine.openChildren(item.id)
         if (kids > 0 && !item.recurring) confirm = item to kids else doTick(item)
     }
 
+    Box(Modifier.fillMaxSize()) {
+    // Under the details screen the list stays as it was, but isn't read out or reachable.
     Scaffold(
+        modifier = if (detail != null) Modifier.clearAndSetSemantics {} else Modifier,
         topBar = {
             TopAppBar(
                 title = {
@@ -197,9 +211,17 @@ fun NookApp(
             PullToRefreshBox(refreshing, onRefresh = {
                 scope.launch { refreshing = true; engine.flush(force = true); refreshing = false }
             }, Modifier.fillMaxSize()) {
-                ListContent(engine, tab, onTick = { onTick(it) }, onLongPress = { moving = it })
+                if (tab == Kind.ACHIEVEMENTS) AchievementsContent(engine,
+                    onAchieve = { i -> tickResult(i) { engine.achieve(i.id, LocalDate.now(), sync = false) } },
+                    onTick = { onTick(it) },
+                    onReopen = { i -> scope.launch { engine.reopen(i.id, sync = false); sync() } },
+                    onOpen = { detail = it.id }, onLongPress = { moving = it })
+                else ListContent(engine, tab, onTick = { onTick(it) }, onLongPress = { moving = it })
             }
         }
+    }
+
+    detail?.let { id -> DetailSheet(engine, id, scope, onDismiss = { detail = null }) }
     }
 
     if (adding) androidx.compose.runtime.key(tab, addForMe) {   // reopened from the widget: fresh sheet, me preselected
@@ -259,33 +281,44 @@ private fun ListContent(engine: SyncEngine, kind: Kind, onTick: (ItemV) -> Unit,
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 96.dp)) {
         groups.forEach { g ->
             if (g.title.isNotEmpty()) item(key = "h_" + (g.sectionId ?: "other")) {
-                Text(g.title.uppercase(), Modifier.padding(start = 16.dp, top = 16.dp, bottom = 4.dp),
-                    style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+                SectionTitle(g.title)
             }
-            items(g.rows, key = { it.item.id }) { row -> ItemLine(row, kind, onTick, onLongPress) }
+            items(g.rows, key = { it.item.id }) { row ->
+                val i = row.item
+                ItemLine(i, row.depth, "Tick ${i.content}",
+                    lines = if (kind == Kind.TASKS) listOf(listOfNotNull(i.assignee ?: "Anyone", dueText(i.due)).joinToString(" · ")) else emptyList(),
+                    onTick = onTick, onOpen = onTick, onLongPress = onLongPress)
+            }
         }
     }
 }
 
+fun dueText(due: String?): String? = due?.let { d -> runCatching { LocalDate.parse(d.take(10)).format(nextFmt) }.getOrDefault(d) }
+
+@Composable
+internal fun SectionTitle(title: String) = Text(title.uppercase(), Modifier.padding(start = 16.dp, top = 16.dp, bottom = 4.dp),
+    style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+
+/** A row: its circle ticks, tapping the rest is [onOpen]; [lines] are shown small under the name (blank ones are not). */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun ItemLine(row: ItemRow, kind: Kind, onTick: (ItemV) -> Unit, onLongPress: (ItemV) -> Unit) {
-    val item = row.item
+internal fun ItemLine(item: ItemV, depth: Int, tickLabel: String, lines: List<String>,
+                      onTick: (ItemV) -> Unit, onOpen: (ItemV) -> Unit, onLongPress: ((ItemV) -> Unit)?, done: Boolean = false) {
     Row(
         Modifier.fillMaxWidth()
-            .combinedClickable(onClick = { onTick(item) }, onLongClick = { onLongPress(item) })
-            .padding(start = (8 + 24 * row.depth).dp, end = 16.dp, top = 2.dp, bottom = 2.dp),
+            .combinedClickable(onClick = { onOpen(item) }, onLongClick = onLongPress?.let { f -> { f(item) } })
+            .padding(start = (8 + 24 * depth).dp, end = 16.dp, top = 2.dp, bottom = 2.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        IconButton(onClick = { onTick(item) }, Modifier.semantics { contentDescription = "Tick ${item.content}" }) {
-            if (item.recurring) Icon(Icons.Filled.Refresh, null)
+        IconButton(onClick = { onTick(item) }, Modifier.semantics { contentDescription = tickLabel }) {
+            if (done) Icon(Icons.Filled.CheckCircle, null, tint = MaterialTheme.colorScheme.primary)
+            else if (item.recurring) Icon(Icons.Filled.Refresh, null)
             else Box(Modifier.size(22.dp).border(2.dp, MaterialTheme.colorScheme.outline, CircleShape))
         }
         Column(Modifier.weight(1f)) {
             Text(item.content, style = MaterialTheme.typography.bodyLarge)
-            if (kind == Kind.TASKS) {
-                val due = item.due?.let { d -> runCatching { LocalDate.parse(d.take(10)).format(nextFmt) }.getOrDefault(d) }
-                Text(listOfNotNull(item.assignee ?: "Anyone", due).joinToString(" · "),
+            lines.filter { it.isNotBlank() }.forEach {
+                Text(it, maxLines = 1, overflow = TextOverflow.Ellipsis,
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }

@@ -71,6 +71,9 @@ interface NookDao {
     @Query("SELECT * FROM ProjectE")
     fun observeProjects(): Flow<List<ProjectE>>
 
+    @Query("SELECT real FROM IdMapE WHERE temp = :temp")
+    fun observeRealId(temp: String): Flow<String?>
+
     @Query("SELECT * FROM PersonE ORDER BY name")
     fun observePeople(): Flow<List<PersonE>>
 

@@ -36,6 +36,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import lt.nook.app.core.ItemV
 import lt.nook.app.core.Known
@@ -47,7 +48,8 @@ import lt.nook.app.sync.SyncEngine
 
 /**
  * The + sheet. Groceries/Shopping: suggestions with their remembered category; a known item goes straight to its
- * category, a new one asks once. Tasks: suggestions + who it's for. Stays open after each add.
+ * category, a new one asks once. Tasks: suggestions + who it's for. Achievements: who it's for + a description.
+ * Stays open after each add.
  */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
@@ -64,21 +66,27 @@ fun AddSheet(engine: SyncEngine, memory: CategoryMemory, kind: Kind, scope: Coro
     val items by remember(kind) { engine.items(kind) }.collectAsState(initial = emptyList())
     val people by remember { engine.people(kind) }.collectAsState(initial = emptyList())
     val focus = remember { FocusRequester() }
-    val lists = kind != Kind.TASKS
+    val lists = kind == Kind.GROCERIES || kind == Kind.SHOPPING
+    val achievement = kind == Kind.ACHIEVEMENTS
+    var description by remember { mutableStateOf("") }
+    suspend fun notLoaded() = if (achievement && engine.hasProject(kind).first() == false) engine.noProjectText(kind) else SyncEngine.NOT_LOADED
 
-    LaunchedEffect(text) { suggestions = memory.suggestions(kind, text) }
+    LaunchedEffect(text) { if (!achievement) suggestions = memory.suggestions(kind, text) }
     LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
-    LaunchedEffect(kind) { if (engine.projectId(kind) == null) hint = SyncEngine.NOT_LOADED }
+    LaunchedEffect(kind) { if (engine.projectId(kind) == null) hint = notLoaded() }
 
     fun reset() { text = ""; hint = null; pick = false; newCat = false; newCatName = "" }
 
     fun duplicate(name: String): ItemV? = if (lists) items.firstOrNull { nameKey(it.content) == nameKey(name) } else null
 
     fun addTo(name: String, sectionId: String?) {
-        reset()
+        val typed = description
+        reset(); description = ""            // at once, so a second tap can't add it again
         scope.launch {
-            if (engine.add(kind, name, sectionId, if (lists) null else assignee, sync = false) == null) hint = SyncEngine.NOT_LOADED
-            else engine.flush(force = true)
+            if (engine.add(kind, name, sectionId, if (lists) null else assignee, sync = false, description = typed.trimEnd()) == null) {
+                hint = notLoaded()
+                if (achievement) { text = name; description = typed }      // nothing typed is lost
+            } else engine.flush(force = true)
         }
     }
 
@@ -95,7 +103,7 @@ fun AddSheet(engine: SyncEngine, memory: CategoryMemory, kind: Kind, scope: Coro
         }
     }
 
-    fun submit() { val n = text.trim(); if (n.isNotEmpty()) place(n) }
+    fun submit() { val n = text.trim(); if (n.isNotEmpty() && tooLong(description) == null) place(n) }
 
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
         Column(Modifier.padding(horizontal = 16.dp).padding(bottom = 24.dp).imePadding(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -103,7 +111,7 @@ fun AddSheet(engine: SyncEngine, memory: CategoryMemory, kind: Kind, scope: Coro
             OutlinedTextField(
                 text, { text = it; hint = null; pick = false },
                 Modifier.fillMaxWidth().focusRequester(focus).testTag("addField"),
-                singleLine = true, placeholder = { Text(if (lists) "Item" else "Task") },
+                singleLine = true, placeholder = { Text(if (lists) "Item" else if (achievement) "Achievement" else "Task") },
                 keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences, imeAction = ImeAction.Done),
                 keyboardActions = KeyboardActions(onDone = { submit() }),
             )
@@ -151,7 +159,13 @@ fun AddSheet(engine: SyncEngine, memory: CategoryMemory, kind: Kind, scope: Coro
                 }
             }
 
-            Button(onClick = { submit() }, enabled = text.isNotBlank(), modifier = Modifier.fillMaxWidth()) { Text("Add") }
+            val long = tooLong(description)
+            if (achievement) OutlinedTextField(description, { description = it }, Modifier.fillMaxWidth().testTag("addDescription"),
+                minLines = 2, maxLines = 5, label = { Text("Description (optional)") },
+                keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences))
+            long?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+
+            Button(onClick = { submit() }, enabled = text.isNotBlank() && long == null, modifier = Modifier.fillMaxWidth()) { Text("Add") }
         }
     }
 }
@@ -160,7 +174,7 @@ fun AddSheet(engine: SyncEngine, memory: CategoryMemory, kind: Kind, scope: Coro
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MoveSheet(engine: SyncEngine, kind: Kind, item: ItemV, scope: CoroutineScope, onDismiss: () -> Unit) {
-    val sections by remember(kind) { engine.sections(kind) }.collectAsState(initial = emptyList())
+    val sections by remember(kind) { engine.moveTargets(kind) }.collectAsState(initial = emptyList())
     ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(Modifier.padding(16.dp).padding(bottom = 16.dp)) {
             Text("Move ${item.content} to", style = MaterialTheme.typography.titleMedium)

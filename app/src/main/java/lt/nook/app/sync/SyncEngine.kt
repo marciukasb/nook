@@ -139,8 +139,14 @@ class SyncEngine(
     fun moveTargets(kind: Kind): Flow<List<SectionV>> =
         sections(kind).map { l -> if (kind == Kind.ACHIEVEMENTS) l.filterNot { isDoneSection(it.name) } else l }
 
-    /** Whether Todoist has this list's project; live. */
-    fun hasProject(kind: Kind): Flow<Boolean> = dao.observeProjects().map { l -> l.any { it.name == nameOf(kind) } }
+    /** Whether Todoist has this list's project (null until anything was synced); live. */
+    fun hasProject(kind: Kind): Flow<Boolean?> = dao.observeProjects().map { l -> if (l.isEmpty()) null else l.any { it.name == nameOf(kind) } }
+
+    fun noProjectText(kind: Kind) = "Create a shared Todoist project called \"${nameOf(kind)}\""
+
+    /** One open item by id (also by the temporary id it had before its first sync); null when it is gone. */
+    fun item(kind: Kind, id: String): Flow<ItemV?> = 
+        combine(items(kind), dao.observeRealId(id)) { l, real -> l.firstOrNull { it.id == (real ?: id) } }
 
     /** Members of a list's project (the people something on it can be assigned to). */
     fun people(kind: Kind): Flow<List<PersonE>> = dao.observePeople().map { l ->

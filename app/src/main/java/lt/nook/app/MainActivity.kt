@@ -35,8 +35,8 @@ import lt.nook.app.ui.UpdateBanner
 import lt.nook.app.update.Release
 import lt.nook.app.update.Updater
 
-/** Opened from the widget: show a tab, maybe with the add sheet open. */
-data class OpenRequest(val tab: Kind, val add: Boolean)
+/** Opened from the widget: show a tab, maybe with the add sheet or one achievement's details open. */
+data class OpenRequest(val tab: Kind, val add: Boolean, val itemId: String? = null)
 
 class MainActivity : ComponentActivity() {
     private var request by mutableStateOf<OpenRequest?>(null)
