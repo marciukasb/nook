@@ -17,7 +17,10 @@ import androidx.glance.appwidget.GlanceAppWidgetReceiver
 import androidx.glance.appwidget.action.ActionCallback
 import androidx.glance.appwidget.action.actionRunCallback
 import androidx.glance.appwidget.action.actionStartActivity
+import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.glance.LocalContext
+import androidx.glance.appwidget.state.updateAppWidgetState
+import androidx.glance.currentState
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import lt.nook.app.sync.FlushWorker
@@ -49,66 +52,117 @@ import androidx.work.WorkerParameters
 import lt.nook.app.MainActivity
 import lt.nook.app.NookApplication
 import lt.nook.app.core.ItemV
+import lt.nook.app.data.Kind
 import java.util.concurrent.TimeUnit
 
 /** What the widget shows; built from Nook's own offline copy, so it works without signal. */
-data class WidgetState(val signedIn: Boolean, val tasks: List<ItemV>, val canUndo: Boolean, val synced: Boolean = true)
+data class WidgetState(
+    val signedIn: Boolean,
+    val tasks: List<ItemV>,
+    val undoLabel: String? = null,
+    val synced: Boolean = true,
+    val selected: Kind = Kind.TASKS,
+    val achievements: List<ItemV> = emptyList(),
+    /** What to create when Todoist has no Achievements project. */
+    val noProject: String? = null,
+)
 
 private val ID = ActionParameters.Key<String>("id")
+val KIND = ActionParameters.Key<String>("kind")
+/** Which list a widget shows; every widget remembers its own. */
+private val SELECTED = stringPreferencesKey("selected")
 
-/** "My tasks": Shared tasks assigned to the signed-in person, tickable from the home screen. */
+/** Shared tasks and achievements assigned to the signed-in person, tickable from the home screen. */
 class MyTasksWidget : GlanceAppWidget() {
     override suspend fun provideGlance(context: Context, id: GlanceId) {
         val app = context.applicationContext as NookApplication
-        val flow = app.engine.myTasksFlow()
+        val tasks = app.engine.myTasksFlow()
+        val achievements = app.engine.myAchievementsFlow()
+        val project = app.engine.hasProject(Kind.ACHIEVEMENTS)
         provideContent {
             // Live: the widget follows Nook's database, sign-in and undo while it's on screen.
-            val data by flow.collectAsState(initial = null)
-            val undo by app.widgetActions.undoAvailable.collectAsState()
+            val data by tasks.collectAsState(initial = null)
+            val ach by achievements.collectAsState(initial = null)
+            val hasProject by project.collectAsState(initial = null)
+            val undo by app.widgetActions.undoLabel.collectAsState()
             val signedIn by app.signedIn.collectAsState()
             GlanceTheme {
-                WidgetContent(WidgetState(signedIn, data?.tasks.orEmpty(), undo && signedIn, synced = data?.me != null))
+                WidgetContent(WidgetState(signedIn, data?.tasks.orEmpty(), undo.takeIf { signedIn && app.widgetActions.canUndo() },
+                    synced = data?.me != null,
+                    selected = if (currentState(SELECTED) == Kind.ACHIEVEMENTS.name) Kind.ACHIEVEMENTS else Kind.TASKS,
+                    achievements = ach?.tasks.orEmpty(),
+                    noProject = if (hasProject == false) app.engine.noProjectText(Kind.ACHIEVEMENTS) else null))
             }
         }
     }
 }
 
-fun openNook(context: Context, add: Boolean) = Intent(context, MainActivity::class.java)
-    .putExtra(MainActivity.EXTRA_TAB, "TASKS").putExtra(MainActivity.EXTRA_ADD, add)
+fun openNook(context: Context, tab: Kind, add: Boolean = false, itemId: String? = null): Intent = Intent(context, MainActivity::class.java)
+    .putExtra(MainActivity.EXTRA_TAB, tab.name).putExtra(MainActivity.EXTRA_ADD, add).putExtra(MainActivity.EXTRA_ITEM, itemId)
     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
 
 @Composable
 fun WidgetContent(s: WidgetState) {
     val c = GlanceTheme.colors
+    val context = LocalContext.current
     Column(GlanceModifier.fillMaxSize().appWidgetBackground().background(c.widgetBackground).cornerRadius(20.dp).padding(12.dp)) {
         Row(GlanceModifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Text(if (s.signedIn) "My tasks · ${s.tasks.size}" else "My tasks",
-                GlanceModifier.defaultWeight().clickable(actionStartActivity(openNook(LocalContext.current, add = false))),
+            if (!s.signedIn) Text("My tasks", GlanceModifier.defaultWeight().clickable(actionStartActivity(openNook(context, Kind.TASKS))),
                 style = TextStyle(color = c.onSurface, fontSize = 16.sp, fontWeight = FontWeight.Bold))
-            if (s.canUndo) {
-                Text("Undo", GlanceModifier.padding(horizontal = 8.dp).clickable(actionRunCallback<UndoAction>()),
-                    style = TextStyle(color = c.primary, fontSize = 14.sp, fontWeight = FontWeight.Medium))
-            }
-            if (s.signedIn) {
+            else {
+                ListName(s, Kind.TASKS, "Tasks ${s.tasks.size}", GlanceModifier)
                 Spacer(GlanceModifier.width(4.dp))
-                Text("+", GlanceModifier.padding(horizontal = 8.dp).clickable(actionStartActivity(openNook(LocalContext.current, add = true))),
+                ListName(s, Kind.ACHIEVEMENTS, if (s.noProject == null) "Achievements ${s.achievements.size}" else "Achievements", GlanceModifier.defaultWeight())
+                Text("+", GlanceModifier.padding(horizontal = 8.dp).clickable(actionStartActivity(openNook(context, s.selected, add = true))),
                     style = TextStyle(color = c.primary, fontSize = 22.sp, fontWeight = FontWeight.Bold))
             }
         }
+        val rest = GlanceModifier.fillMaxWidth().defaultWeight().padding(top = 4.dp)
+        val ach = s.selected == Kind.ACHIEVEMENTS
+        val list = if (ach) s.achievements else s.tasks
         when {
-            !s.signedIn -> Text("Open Nook to sign in", GlanceModifier.padding(top = 8.dp), style = TextStyle(color = c.onSurfaceVariant))
-            !s.synced -> Text("Syncing…", GlanceModifier.padding(top = 8.dp), style = TextStyle(color = c.onSurfaceVariant))
-            s.tasks.isEmpty() -> Text("Nothing assigned to you", GlanceModifier.padding(top = 8.dp), style = TextStyle(color = c.onSurfaceVariant))
-            else -> LazyColumn(GlanceModifier.fillMaxSize().padding(top = 4.dp)) {
+            !s.signedIn -> Note("Open Nook to sign in", rest)
+            !s.synced -> Note("Syncing…", rest)
+            ach && s.noProject != null -> Note(s.noProject, rest)
+            list.isEmpty() -> Note("Nothing assigned to you", rest)
+            else -> LazyColumn(rest) {
                 // Keyed on id + date: a repeating task that moved to its next date is a new row, so its box resets.
-                items(s.tasks, itemId = { ("${it.id}|${it.due}").hashCode().toLong() }) { t ->
-                    CheckBox(checked = false, onCheckedChange = actionRunCallback<TickAction>(actionParametersOf(ID to t.id)),
-                        text = t.content + (t.due?.let { " · ${shortDate(it)}" } ?: ""), modifier = GlanceModifier.fillMaxWidth().padding(vertical = 2.dp),
-                        style = TextStyle(color = c.onSurface, fontSize = 15.sp), maxLines = 2)
-                }
+                items(list, itemId = { ("${it.id}|${it.due}").hashCode().toLong() }) { t -> if (ach) AchievementRow(t) else TaskRow(t) }
             }
         }
+        s.undoLabel?.let {
+            Text("$it · Undo", GlanceModifier.fillMaxWidth().padding(top = 6.dp).clickable(actionRunCallback<UndoAction>()), maxLines = 1,
+                style = TextStyle(color = c.primary, fontSize = 14.sp, fontWeight = FontWeight.Medium))
+        }
     }
+}
+
+/** One half of the toggle: the list shown opens Nook on it, the other one switches to it. */
+@Composable
+private fun ListName(s: WidgetState, kind: Kind, text: String, modifier: GlanceModifier) {
+    val c = GlanceTheme.colors
+    val on = s.selected == kind
+    Text(text, modifier.padding(vertical = 6.dp, horizontal = 4.dp).clickable(
+            if (on) actionStartActivity(openNook(LocalContext.current, kind)) else actionRunCallback<SelectAction>(actionParametersOf(KIND to kind.name))),
+        maxLines = 1, style = TextStyle(color = if (on) c.onSurface else c.onSurfaceVariant, fontSize = 15.sp,
+            fontWeight = if (on) FontWeight.Bold else FontWeight.Normal))
+}
+
+@Composable
+private fun Note(text: String, modifier: GlanceModifier) = Text(text, modifier, style = TextStyle(color = GlanceTheme.colors.onSurfaceVariant))
+
+@Composable
+private fun TaskRow(t: ItemV) = CheckBox(checked = false, onCheckedChange = actionRunCallback<TickAction>(actionParametersOf(ID to t.id)),
+    text = t.content + (t.due?.let { " · ${shortDate(it)}" } ?: ""), modifier = GlanceModifier.fillMaxWidth().padding(vertical = 2.dp),
+    style = TextStyle(color = GlanceTheme.colors.onSurface, fontSize = 15.sp), maxLines = 2)
+
+/** The box achieves it; the name opens its details in Nook. */
+@Composable
+private fun AchievementRow(t: ItemV) = Row(GlanceModifier.fillMaxWidth().padding(vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+    CheckBox(checked = false, onCheckedChange = actionRunCallback<AchieveAction>(actionParametersOf(ID to t.id)))
+    Text(t.content, GlanceModifier.defaultWeight().padding(start = 4.dp, top = 6.dp, bottom = 6.dp)
+        .clickable(actionStartActivity(openNook(LocalContext.current, Kind.ACHIEVEMENTS, itemId = t.id))), maxLines = 2,
+        style = TextStyle(color = GlanceTheme.colors.onSurface, fontSize = 15.sp))
 }
 
 private val DATE = java.time.format.DateTimeFormatter.ofPattern("EEE d MMM", java.util.Locale.ENGLISH)
@@ -127,6 +181,23 @@ class TickAction : ActionCallback {
         val id = parameters[ID] ?: return
         app.widgetActions.tick(id)          // the widget updates itself from the database (live)
         FlushWorker.sendNow(context)        // the network part runs as background work, not inside this tap
+    }
+}
+
+class AchieveAction : ActionCallback {
+    override suspend fun onAction(context: Context, glanceId: GlanceId, parameters: ActionParameters) {
+        val app = context.applicationContext as NookApplication
+        app.widgetActions.achieve(parameters[ID] ?: return)
+        FlushWorker.sendNow(context)
+    }
+}
+
+/** Switches this widget between Tasks and Achievements. */
+class SelectAction : ActionCallback {
+    override suspend fun onAction(context: Context, glanceId: GlanceId, parameters: ActionParameters) {
+        val kind = parameters[KIND] ?: return
+        updateAppWidgetState(context, glanceId) { it[SELECTED] = kind }
+        MyTasksWidget().update(context, glanceId)
     }
 }
 

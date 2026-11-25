@@ -1,5 +1,5 @@
 <resources>
     <string name="app_name">Nook</string>
     <string name="widget_my_tasks">My tasks</string>
-    <string name="widget_my_tasks_description">Shared tasks assigned to you. Tick them off from the home screen.</string>
+    <string name="widget_my_tasks_description">Shared tasks and achievements assigned to you. Tick them off from the home screen.</string>
 </resources>

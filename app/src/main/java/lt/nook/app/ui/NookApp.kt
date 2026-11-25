@@ -104,11 +104,13 @@ fun NookApp(
     var adding by remember { mutableStateOf(false) }
     var addForMe by remember { mutableStateOf<String?>(null) }
     var detail by rememberSaveable { mutableStateOf<String?>(null) }
+    var unsaved by remember { mutableStateOf(false) }
     LaunchedEffect(openRequest) {   // from the home-screen widget: a tab, maybe adding for me or one item's details
         val r = openRequest ?: return@LaunchedEffect
+        if (detail != null && unsaved) { onRequestHandled(); return@LaunchedEffect }   // text being written stays on the screen
+        detail = r.itemId
         tab = r.tab
         if (r.add) { addForMe = engine.meId(); adding = true }
-        r.itemId?.let { detail = it }
         onRequestHandled()
     }
     var moving by remember { mutableStateOf<ItemV?>(null) }
@@ -221,7 +223,7 @@ fun NookApp(
         }
     }
 
-    detail?.let { id -> DetailSheet(engine, id, scope, onDismiss = { detail = null }) }
+    detail?.let { id -> DetailSheet(engine, id, scope, onUnsaved = { unsaved = it }, onDismiss = { detail = null; unsaved = false }) }
     }
 
     if (adding) androidx.compose.runtime.key(tab, addForMe) {   // reopened from the widget: fresh sheet, me preselected

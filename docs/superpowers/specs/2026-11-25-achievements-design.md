@@ -1,6 +1,6 @@
 # Achievements in Nook (design)
 
-Date: 2026-11-25 · Status: draft for owner review
+Date: 2026-11-25 · Status: approved by the owner 2026-11-25
 
 ## Why
 Big, slow goals should not sit in the same list as small tasks. They get their own list ("Achievements"), room for a

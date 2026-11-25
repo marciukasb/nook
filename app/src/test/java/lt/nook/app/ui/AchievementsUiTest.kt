@@ -269,4 +269,18 @@ class AchievementsUiTest {
         waitFor { rule.onAllNodesWithTag("detailText").fetchSemanticsNodes().isNotEmpty() }
         field().assertTextContains("x")
     }
+
+    @Test fun fromWidget_neverReplacesUnsavedText() {
+        lateinit var other: String
+        start { fake.item(fake.achievements, "Weld", description = "x"); other = fake.item(fake.achievements, "Run", description = "y") }
+        openDetails("Weld")
+        rule.runOnIdle { request = OpenRequest(Kind.ACHIEVEMENTS, add = false, itemId = other) }
+        waitFor { rule.onAllNodesWithText("y").fetchSemanticsNodes().isNotEmpty() }       // nothing typed: switches
+        field().performTextReplacement("typed")
+        rule.runOnIdle { request = OpenRequest(Kind.TASKS, add = false) }
+        rule.waitForIdle()
+        field().assertTextContains("typed")
+        rule.onNodeWithTag("detailSave").performClick()
+        waitFor { fake.get(other)!!.description == "typed" }
+    }
 }

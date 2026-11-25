@@ -53,7 +53,7 @@ fun tooLong(text: String): String? =
 
 /** One achievement, full screen over the app: its name, who it's for and its description, which can be edited. */
 @Composable
-fun DetailSheet(engine: SyncEngine, id: String, scope: CoroutineScope, onDismiss: () -> Unit) {
+fun DetailSheet(engine: SyncEngine, id: String, scope: CoroutineScope, onUnsaved: (Boolean) -> Unit = {}, onDismiss: () -> Unit) {
     var item by remember(id) { mutableStateOf<ItemV?>(null) }
     var seen by rememberSaveable(id) { mutableStateOf(false) }     // it has been shown: if it goes now, it was removed
     var gone by remember(id) { mutableStateOf(false) }
@@ -72,10 +72,13 @@ fun DetailSheet(engine: SyncEngine, id: String, scope: CoroutineScope, onDismiss
         }
     }
 
+    val unsaved = seen && text != base
+    LaunchedEffect(unsaved) { onUnsaved(unsaved) }
+
     fun save() = scope.launch {
         if (engine.describe(id, text, sync = false)) { onDismiss(); engine.flush(force = true) }
     }
-    fun close() { if (seen && text != base) asking = true else onDismiss() }
+    fun close() { if (unsaved) asking = true else onDismiss() }
 
     BackHandler { close() }
     Surface(Modifier.fillMaxSize()) {
@@ -97,7 +100,7 @@ fun DetailSheet(engine: SyncEngine, id: String, scope: CoroutineScope, onDismiss
                 keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences))
             val problem = if (gone) "This was removed" else tooLong(text)
             problem?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-            Button({ save() }, Modifier.fillMaxWidth().testTag("detailSave"), enabled = seen && problem == null && text != base) { Text("Save") }
+            Button({ save() }, Modifier.fillMaxWidth().testTag("detailSave"), enabled = unsaved && problem == null) { Text("Save") }
         }
     }
 

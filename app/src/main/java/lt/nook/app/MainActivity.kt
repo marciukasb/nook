@@ -44,8 +44,8 @@ class MainActivity : ComponentActivity() {
     private fun readRequest(intent: Intent?) {
         if (intent == null || intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY != 0) return   // reopened from Recents
         val tab = intent.getStringExtra(EXTRA_TAB)?.let { t -> Kind.entries.firstOrNull { it.name == t } } ?: return
-        request = OpenRequest(tab, intent.getBooleanExtra(EXTRA_ADD, false))
-        intent.removeExtra(EXTRA_TAB); intent.removeExtra(EXTRA_ADD)   // used once
+        request = OpenRequest(tab, intent.getBooleanExtra(EXTRA_ADD, false), intent.getStringExtra(EXTRA_ITEM))
+        intent.removeExtra(EXTRA_TAB); intent.removeExtra(EXTRA_ADD); intent.removeExtra(EXTRA_ITEM)   // used once
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -103,6 +103,7 @@ class MainActivity : ComponentActivity() {
     companion object {
         const val EXTRA_TAB = "lt.nook.app.TAB"
         const val EXTRA_ADD = "lt.nook.app.ADD"
+        const val EXTRA_ITEM = "lt.nook.app.ITEM"
     }
 }
 
