@@ -147,7 +147,7 @@ fun NookApp(
                 snack.currentSnackbarData?.dismiss()
                 snack.showSnackbar(nextDateText(r.nextDate))
             }
-            TickResult.NotFound -> {}
+            is TickResult.Achieved, TickResult.NotFound -> {}
         }
     }
 

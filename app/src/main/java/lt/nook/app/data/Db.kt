@@ -68,6 +68,9 @@ interface NookDao {
     @Query("SELECT * FROM SectionE WHERE projectId IN (SELECT id FROM ProjectE WHERE name = :project) ORDER BY `order`")
     fun observeSections(project: String): Flow<List<SectionE>>
 
+    @Query("SELECT * FROM ProjectE")
+    fun observeProjects(): Flow<List<ProjectE>>
+
     @Query("SELECT * FROM PersonE ORDER BY name")
     fun observePeople(): Flow<List<PersonE>>
 

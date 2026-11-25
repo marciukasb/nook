@@ -11,9 +11,16 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import lt.nook.app.core.AchievementLists
+import lt.nook.app.core.DONE_SECTION
 import lt.nook.app.core.ItemV
+import lt.nook.app.core.MAX_DESCRIPTION
 import lt.nook.app.core.SectionV
+import lt.nook.app.core.achievementLists
+import lt.nook.app.core.isDoneSection
+import lt.nook.app.core.joinDescription
 import lt.nook.app.core.shortNames
+import lt.nook.app.core.splitDescription
 import lt.nook.app.data.IdMapE
 import lt.nook.app.data.ItemE
 import lt.nook.app.data.Kind
@@ -24,6 +31,7 @@ import lt.nook.app.data.PersonE
 import lt.nook.app.data.ProjectE
 import lt.nook.app.data.SectionE
 import lt.nook.app.data.Settings
+import java.time.LocalDate
 
 sealed interface Status {
     data object Synced : Status
@@ -40,7 +48,11 @@ data class SyncState(val status: Status = Status.Syncing, val pending: Int = 0, 
 /** What an undo needs: the rows that were hidden and the close command that hid them. */
 data class UndoToken(val closeUuid: String, val rows: List<ItemE>)
 
+/** What undoing "achieved" needs: how the item was, and the commands that changed it. */
+data class AchieveUndo(val before: ItemE, val uuids: List<String>)
+
 sealed interface TickResult {
+    data class Achieved(val undo: AchieveUndo) : TickResult
     data class Hidden(val undo: UndoToken) : TickResult
     /** A repeating task moved to its next date ([nextDate] null if not known yet, e.g. offline). */
     data class Advanced(val nextDate: String?) : TickResult
@@ -99,13 +111,18 @@ class SyncEngine(
 
     /** Open Shared tasks assigned to the signed-in person, in the Tasks tab's order (home-screen widget); live.
      *  me = null until the first sync (or after sign-out). ItemV.assignee holds the person's Todoist id here. */
-    fun myTasksFlow(): Flow<MyTasks> {
-        val name = nameOf(Kind.TASKS)
+    fun myTasksFlow(): Flow<MyTasks> = mine(Kind.TASKS) { items, secs -> lt.nook.app.core.group(items, secs) }
+
+    /** The same for achievements (those not in Done). */
+    fun myAchievementsFlow(): Flow<MyTasks> = mine(Kind.ACHIEVEMENTS) { items, secs -> achievementLists(items, secs).open }
+
+    private fun mine(kind: Kind, grouped: (List<ItemV>, List<SectionV>) -> List<lt.nook.app.core.Group>): Flow<MyTasks> {
+        val name = nameOf(kind)
         return combine(dao.observeMeta(USER_ID), dao.observeItems(name), dao.observeSections(name)) { me, items, secs ->
             if (me == null) return@combine MyTasks(null, emptyList())
-            val views = items.map { ItemV(it.id, it.content, it.sectionId, it.parentId, it.order, it.responsibleUid, it.dueDate, it.recurring) }
+            val views = items.map { ItemV(it.id, it.content, it.sectionId, it.parentId, it.order, it.responsibleUid, it.dueDate, it.recurring, it.description) }
             val sections = secs.map { SectionV(it.id, it.name, it.order) }
-            MyTasks(me, lt.nook.app.core.group(views, sections).flatMap { g -> g.rows.map { it.item } }.filter { it.assignee == me })
+            MyTasks(me, grouped(views, sections).flatMap { g -> g.rows.map { it.item } }.filter { it.assignee == me })
         }
     }
 
@@ -113,6 +130,17 @@ class SyncEngine(
 
     fun sections(kind: Kind): Flow<List<SectionV>> =
         dao.observeSections(nameOf(kind)).map { l -> l.map { SectionV(it.id, it.name, it.order) } }
+
+    /** Achievements, open and done. */
+    fun achievements(): Flow<AchievementLists> =
+        combine(items(Kind.ACHIEVEMENTS), sections(Kind.ACHIEVEMENTS)) { items, secs -> achievementLists(items, secs) }
+
+    /** Sections an item can be moved to by hand (an achievement gets to Done only by achieving it). */
+    fun moveTargets(kind: Kind): Flow<List<SectionV>> =
+        sections(kind).map { l -> if (kind == Kind.ACHIEVEMENTS) l.filterNot { isDoneSection(it.name) } else l }
+
+    /** Whether Todoist has this list's project; live. */
+    fun hasProject(kind: Kind): Flow<Boolean> = dao.observeProjects().map { l -> l.any { it.name == nameOf(kind) } }
 
     /** Members of a list's project (the people something on it can be assigned to). */
     fun people(kind: Kind): Flow<List<PersonE>> = dao.observePeople().map { l ->
@@ -137,16 +165,17 @@ class SyncEngine(
     private suspend fun resolve(id: String): String = dao.realId(id) ?: id
 
     /** Adds an item; [sectionId] may be a temp id from [newSection]. Returns its id, or null if lists aren't loaded. */
-    suspend fun add(kind: Kind, content: String, sectionId: String?, assignee: String?, sync: Boolean = true): String? {
+    suspend fun add(kind: Kind, content: String, sectionId: String?, assignee: String?, sync: Boolean = true,
+                    description: String = ""): String? {
         val pid = projectId(kind)
         if (pid == null) { _state.update { it.copy(message = NOT_LOADED) }; return null }
         val name = content.trim()
         val sid = sectionId?.let { resolve(it) }
-        val c = addItem(name, pid, sid, assignee)
+        val c = addItem(name, pid, sid, assignee, description)
         val id = c.tempId!!
         db.withTransaction {
             val order = (dao.itemsOf(pid).maxOfOrNull { it.order } ?: 0) + 1
-            dao.upsertItems(listOf(ItemE(id, pid, sid, null, name, order, assignee, null, null, false)))
+            dao.upsertItems(listOf(ItemE(id, pid, sid, null, name, order, assignee, null, null, false, description = description)))
             queue(c, id, name)
         }
         learner?.used(kind, name, sid?.let { dao.section(it)?.name })
@@ -228,6 +257,97 @@ class SyncEngine(
         }
         kindOf(item.projectId)?.let { learner?.used(it, item.content, sectionId?.let { s -> dao.section(s)?.name }) }
         after(sync)
+    }
+
+    /**
+     * Achieved: moves the item to the Done section (made if there is none) and adds the date to its description; it is
+     * never completed. Repeating items and sub-items are ticked like any task.
+     */
+    suspend fun achieve(id0: String, today: LocalDate, sync: Boolean = true): TickResult {
+        val id = resolve(id0)
+        val first = dao.item(id) ?: return TickResult.NotFound
+        if (first.recurring || first.parentId?.let { dao.item(it) } != null) return tick(id, sync)
+        val undo = stateLock.withLock {
+            db.withTransaction {
+                val item = dao.item(resolve(id))?.takeIf { !it.hidden } ?: return@withTransaction null
+                if (isDone(item)) return@withTransaction null
+                val done = doneSection(item.projectId)
+                val text = joinDescription(item.description, today)
+                val cs = listOf(moveItem(item.id, done, item.projectId), updateDescription(item.id, text))
+                dao.upsertItems(listOf(item.copy(sectionId = done, parentId = null, description = text)))
+                cs.forEach { queue(it, item.id, item.content) }
+                AchieveUndo(item, cs.map { it.uuid })
+            }
+        } ?: return TickResult.NotFound
+        after(sync)
+        return TickResult.Achieved(undo)
+    }
+
+    /** Back to its old section and without the date (text written meanwhile stays). Waits only for the database. */
+    suspend fun undoAchieve(u: AchieveUndo, sync: Boolean = true) {
+        val cancelled = stateLock.withLock {
+            db.withTransaction {
+                val item = dao.item(resolve(u.before.id)) ?: return@withTransaction true
+                val own = dao.allPending().filter { it.targetId == item.id }.map { it.uuid }
+                // Nothing sent and nothing done since: just forget both changes.
+                val waiting = u.uuids.none { it in inflight } && own.takeLast(u.uuids.size) == u.uuids
+                if (waiting) dao.deletePending(u.uuids)
+                restore(item, u.before.sectionId?.let { resolve(it) }, splitDescription(u.before.description).second, send = !waiting)
+                waiting
+            }
+        }
+        if (cancelled) refreshPending() else after(sync)
+    }
+
+    /** A finished achievement is open again: out of Done, without its date. */
+    suspend fun reopen(id0: String, sync: Boolean = true) {
+        stateLock.withLock {
+            db.withTransaction {
+                val item = dao.item(resolve(id0))?.takeIf { isDone(it) } ?: return@withTransaction
+                restore(item, null, null, send = true)
+            }
+        }
+        after(sync)
+    }
+
+    private suspend fun restore(item: ItemE, sectionId: String?, day: LocalDate?, send: Boolean) {
+        val text = joinDescription(item.description, day)
+        dao.upsertItems(listOf(item.copy(sectionId = sectionId, description = text)))
+        if (!send) return
+        queue(moveItem(item.id, sectionId, item.projectId), item.id, item.content)
+        queue(updateDescription(item.id, text), item.id, item.content)
+    }
+
+    /** Replaces the text of a description; its date line stays. False (with a message) when it is too long. */
+    suspend fun describe(id0: String, text: String, sync: Boolean = true): Boolean {
+        if (text.trimEnd().length > MAX_DESCRIPTION) {
+            _state.update { it.copy(message = "Descriptions can have $MAX_DESCRIPTION characters at most") }
+            return false
+        }
+        val changed = stateLock.withLock {
+            db.withTransaction {
+                val item = dao.item(resolve(id0)) ?: return@withTransaction false
+                val whole = joinDescription(text, splitDescription(item.description).second)
+                if (whole == item.description) return@withTransaction false
+                dao.upsertItems(listOf(item.copy(description = whole)))
+                queue(updateDescription(item.id, whole), item.id, item.content)
+                true
+            }
+        }
+        if (changed) after(sync)
+        return true
+    }
+
+    private suspend fun isDone(item: ItemE) = item.sectionId?.let { dao.section(it) }?.let { isDoneSection(it.name) } ?: false
+
+    /** The project's Done section; queues creating it the first time. Inside a transaction. */
+    private suspend fun doneSection(pid: String): String {
+        val all = dao.sectionsOf(pid)
+        all.firstOrNull { isDoneSection(it.name) }?.let { return it.id }
+        val c = addSection(DONE_SECTION, pid)
+        dao.upsertSections(listOf(SectionE(c.tempId!!, pid, DONE_SECTION, (all.maxOfOrNull { it.order } ?: 0) + 1)))
+        queue(c, c.tempId, DONE_SECTION)
+        return c.tempId
     }
 
     private suspend fun after(sync: Boolean) { if (sync) flush(force = true) else refreshPending() }
@@ -340,7 +460,7 @@ class SyncEngine(
     }
 
     private suspend fun dropOptimistic(target: String, c: Command) {
-        if (c.type == "item_add" || c.type == "item_close" || c.type == "item_move" || c.type == "item_uncomplete") dao.deleteItems(listOf(target))
+        if (c.type == "item_add" || c.type == "item_close" || c.type == "item_move" || c.type == "item_update" || c.type == "item_uncomplete") dao.deleteItems(listOf(target))
         if (c.type == "section_add") dao.deleteSections(listOf(target))
     }
 
