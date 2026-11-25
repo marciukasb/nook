@@ -44,7 +44,7 @@ class SyncEngineTest {
         assertEquals(listOf("Milk"), e.names())
         assertEquals(listOf("Dairy"), e.sections(Kind.GROCERIES).first().map { it.name })
         assertEquals("Sam", e.items(Kind.TASKS).first().single().assignee)
-        assertEquals(setOf("Alex", "Sam"), e.people().first().map { it.name }.toSet())
+        assertEquals(setOf("Alex", "Sam"), e.people(Kind.TASKS).first().map { it.name }.toSet())
         assertEquals(Status.Synced, e.state.value.status)
     }
 

@@ -9,6 +9,7 @@ import lt.nook.app.auth.Session
 import lt.nook.app.auth.TokenStore
 import lt.nook.app.data.CategoryMemory
 import lt.nook.app.data.Kind
+import lt.nook.app.data.MIGRATION_1_2
 import lt.nook.app.data.NookDb
 import lt.nook.app.data.Settings
 import kotlinx.coroutines.CoroutineScope
@@ -39,7 +40,7 @@ class NookApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
-        db = Room.databaseBuilder(this, NookDb::class.java, "nook.db").build()
+        db = Room.databaseBuilder(this, NookDb::class.java, "nook.db").addMigrations(MIGRATION_1_2).build()
         tokens = KeystoreTokenStore(getSharedPreferences("auth", Context.MODE_PRIVATE))
         settings = Settings(getSharedPreferences("settings", Context.MODE_PRIVATE))
         transport = HttpTransport()
@@ -54,7 +55,7 @@ class NookApplication : Application() {
             refreshWidgets(this)
             if (seeding.tryLock()) try {
                 val token = tokens.get()
-                if (token != null) for (k in Kind.entries) engine.projectId(k)?.let { memory.seedIfDue(k, transport, token, it) }
+                if (token != null) for (k in Kind.entries - Kind.ACHIEVEMENTS) engine.projectId(k)?.let { memory.seedIfDue(k, transport, token, it) }
             } finally { seeding.unlock() }
         }
     }

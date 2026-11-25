@@ -23,6 +23,7 @@ import lt.nook.app.data.PendingE
 import lt.nook.app.data.PersonE
 import lt.nook.app.data.ProjectE
 import lt.nook.app.data.SectionE
+import lt.nook.app.data.Settings
 
 sealed interface Status {
     data object Synced : Status
@@ -85,7 +86,7 @@ class SyncEngine(
 
     // ---- reading ----
 
-    private fun nameOf(kind: Kind) = projectNames().getValue(kind)
+    private fun nameOf(kind: Kind) = projectNames()[kind] ?: Settings.DEFAULTS.getValue(kind)
 
     fun items(kind: Kind): Flow<List<ItemV>> =
         combine(dao.observeItems(nameOf(kind)), dao.observePeople()) { items, people ->
@@ -113,10 +114,10 @@ class SyncEngine(
     fun sections(kind: Kind): Flow<List<SectionV>> =
         dao.observeSections(nameOf(kind)).map { l -> l.map { SectionV(it.id, it.name, it.order) } }
 
-    /** Collaborators of Shared tasks (the people a task can be assigned to). */
-    fun people(): Flow<List<PersonE>> = dao.observePeople().map { l ->
+    /** Members of a list's project (the people something on it can be assigned to). */
+    fun people(kind: Kind): Flow<List<PersonE>> = dao.observePeople().map { l ->
         val short = shortNames(l.associate { it.id to it.name })
-        l.filter { it.inTasks }.map { it.copy(name = short.getValue(it.id)) }
+        l.filter { if (kind == Kind.ACHIEVEMENTS) it.inAchievements else it.inTasks }.map { it.copy(name = short.getValue(it.id)) }
     }
 
     suspend fun projectId(kind: Kind): String? = dao.projects().firstOrNull { it.name == nameOf(kind) }?.id
@@ -124,7 +125,7 @@ class SyncEngine(
     suspend fun openChildren(id: String): Int = descendants(id, dao.allItems().filter { !it.hidden }).size
 
     private fun ItemE.toView(names: Map<String, String>) =
-        ItemV(id, content, sectionId, parentId, order, responsibleUid?.let { names[it] ?: "?" }, dueDate, recurring)
+        ItemV(id, content, sectionId, parentId, order, responsibleUid?.let { names[it] ?: "?" }, dueDate, recurring, description)
 
     fun clearMessage() = _state.update { it.copy(message = null) }
 
@@ -250,7 +251,7 @@ class SyncEngine(
 
     private suspend fun kindOf(projectId: String): Kind? {
         val name = dao.projects().firstOrNull { it.id == projectId }?.name ?: return null
-        return projectNames().entries.firstOrNull { it.value == name }?.key
+        return Kind.entries.firstOrNull { nameOf(it) == name }
     }
 
     private suspend fun refreshPending() {
@@ -363,7 +364,8 @@ class SyncEngine(
 
     private suspend fun missingProjects(): List<String>? {
         val have = dao.projects().map { it.name }.toSet()
-        return projectNames().values.filter { it !in have }.takeIf { it.isNotEmpty() }
+        // Achievements are optional: without that project only its own tab says so.
+        return (Kind.entries - Kind.ACHIEVEMENTS).map(::nameOf).filter { it !in have }.takeIf { it.isNotEmpty() }
     }
 
     /** Applies one sync response. Returns messages for commands Todoist refused. */
@@ -396,7 +398,7 @@ class SyncEngine(
             }
             dao.deletePending(done)
             val protected = dao.allPending().mapNotNull { it.targetId }.toSet()
-            merge(resp, protected)
+            if (merge(resp, protected)) resync = true
             dao.setMeta(MetaE(SYNC_TOKEN, if (failed.isEmpty() && !resync) resp.syncToken else "*"))
             if (resync && failed.isEmpty()) needResync = true
             failed
@@ -422,26 +424,34 @@ class SyncEngine(
         })
     }
 
-    private suspend fun merge(resp: SyncResponse, protected: Set<String>) {
+    /** True when the set of our projects changed: what was in a new one may be older than our sync token. */
+    private suspend fun merge(resp: SyncResponse, protected: Set<String>): Boolean {
         // Projects
         val liveProjects = resp.projects.filter { !it.isDeleted && !it.isArchived }
         val goneProjects = resp.projects.filter { it.isDeleted || it.isArchived }.map { it.id }
         if (resp.fullSync) dao.deleteProjects(dao.projects().map { it.id } - liveProjects.map { it.id }.toSet())
         dao.deleteProjects(goneProjects)
         dao.upsertProjects(liveProjects.map { ProjectE(it.id, it.name) })
-        val wanted = projectNames().values.toSet()
+        val wanted = Kind.entries.map(::nameOf).toSet()
         val ours = dao.projects().filter { it.name in wanted }.map { it.id }.toSet()
+        val oursText = ours.sorted().joinToString(",")
+        val changed = !resp.fullSync && dao.meta(OURS) != oursText
+        dao.setMeta(MetaE(OURS, oursText))
 
-        // People: everyone known; "inTasks" from the Shared tasks project's active members (+ me).
+        // People: everyone known; which lists' projects they are active members of (+ me).
         resp.user?.let { dao.setMeta(MetaE(USER_ID, it.id)) }
-        val tasksId = dao.projects().firstOrNull { it.name == projectNames()[Kind.TASKS] }?.id
-        val names = (dao.people().associate { it.id to it.name } + resp.collaborators.associate { it.id to it.fullName } +
+        val known = dao.people()
+        val names = (known.associate { it.id to it.name } + resp.collaborators.associate { it.id to it.fullName } +
             listOfNotNull(resp.user).associate { it.id to it.fullName })
-        val states = resp.collaboratorStates.filter { it.projectId == tasksId }
-        val membership = dao.people().associate { it.id to it.inTasks }.toMutableMap()
-        states.forEach { membership[it.userId] = it.state == "active" }
-        resp.user?.let { if (tasksId != null) membership[it.id] = true }
-        dao.upsertPeople(names.map { (id, n) -> PersonE(id, n, membership[id] ?: false) })
+        fun members(pid: String?, before: (PersonE) -> Boolean): Map<String, Boolean> {
+            val m = known.associate { it.id to before(it) }.toMutableMap()
+            resp.collaboratorStates.filter { it.projectId == pid }.forEach { m[it.userId] = it.state == "active" }
+            resp.user?.let { if (pid != null) m[it.id] = true }
+            return m
+        }
+        val inTasks = members(projectId(Kind.TASKS)) { it.inTasks }
+        val inAch = members(projectId(Kind.ACHIEVEMENTS)) { it.inAchievements }
+        dao.upsertPeople(names.map { (id, n) -> PersonE(id, n, inTasks[id] ?: false, inAch[id] ?: false) })
 
         // Sections
         if (resp.fullSync) {
@@ -460,20 +470,22 @@ class SyncEngine(
             dao.deleteItems(dao.allItems().map { it.id }.filter { it !in keep })
         }
         val sectionNames = ours.flatMap { dao.sectionsOf(it) }.associate { it.id to it.name }
-        val kinds = projectNames().entries.associate { (k, n) -> n to k }
+        val kinds = Kind.entries.associateBy(::nameOf)
         val projectName = dao.projects().associate { it.id to it.name }
         resp.items.forEach { i ->
             if (i.id in protected) return@forEach
             if (i.checked || i.isDeleted || i.projectId !in ours) { dao.deleteItems(listOf(i.id)); return@forEach }
             dao.upsertItems(listOf(ItemE(i.id, i.projectId, i.sectionId, i.parentId, i.content, i.childOrder,
-                i.responsibleUid, i.due?.date, i.due?.string, i.due?.isRecurring == true)))
+                i.responsibleUid, i.due?.date, i.due?.string, i.due?.isRecurring == true, description = i.description)))
             kinds[projectName[i.projectId]]?.let { k -> learner?.observed(k, i.content, i.sectionId?.let { sectionNames[it] }) }
         }
+        return changed
     }
 
     companion object {
         const val SYNC_TOKEN = "sync_token"
         const val USER_ID = "user_id"
+        private const val OURS = "our_projects"
         const val NOT_LOADED = "Lists aren't loaded yet — pull down to refresh"
     }
 }

@@ -4,11 +4,11 @@ import java.time.Instant
 import java.time.LocalDate
 
 /**
- * In-memory Todoist for tests: the five commands Nook uses, uuid de-duplication, incremental sync tokens and
+ * In-memory Todoist for tests: the six commands Nook uses, uuid de-duplication, incremental sync tokens and
  * switches to simulate trouble. All data is fake.
  */
 class FakeTodoist : Transport {
-    val groceries = "p1"; val shopping = "p2"; val tasks = "p3"
+    val groceries = "p1"; val shopping = "p2"; val tasks = "p3"; val achievements = "p4"
     val me = "u1"; val partner = "u2"
     var token = "good"
     var calls = 0
@@ -35,14 +35,22 @@ class FakeTodoist : Transport {
     fun revokeToken() { token = "revoked" }
     fun renameProject(id: String, name: String) { projects.replaceAll { if (it.id == id) it.copy(name = name) else it }; rev++ }
 
+    private val states = mutableListOf(RCollabState(tasks, me), RCollabState(tasks, partner))
+    /** The optional fourth list; not there unless a test creates it. */
+    fun addAchievementsProject(name: String = "Achievements", members: List<String> = listOf(me, partner)) {
+        projects += RProject(achievements, name); members.forEach { states += RCollabState(achievements, it) }; rev++
+    }
+    /** Someone edits a description elsewhere. */
+    fun describeElsewhere(id: String, text: String) { val (i, _) = items.getValue(id); items[id] = i.copy(description = text) to ++rev }
+
     fun section(project: String, name: String, order: Int = sections.size + 1): String {
         val id = "s${nextId++}"; sections[id] = RSection(id, project, name, order) to ++rev; return id
     }
     fun item(project: String, content: String, section: String? = null, parent: String? = null,
-             responsible: String? = null, due: RDue? = null): String {
+             responsible: String? = null, due: RDue? = null, description: String = ""): String {
         val id = "i${nextId++}"
         val order = items.values.count { it.first.projectId == project } + 1
-        items[id] = RItem(id, project, section, parent, content, childOrder = order, responsibleUid = responsible, due = due) to ++rev
+        items[id] = RItem(id, project, section, parent, content, childOrder = order, responsibleUid = responsible, due = due, description = description) to ++rev
         return id
     }
     /** Another phone or the kiosk deletes/ticks an item. */
@@ -86,7 +94,7 @@ class FakeTodoist : Transport {
             sections = sections.values.filter { full || it.second > since!! }.map { it.first },
             items = items.values.filter { full && !it.first.checked && !it.first.isDeleted || !full && it.second > since!! }.map { it.first },
             collaborators = people,
-            collaboratorStates = listOf(RCollabState(tasks, me), RCollabState(tasks, partner)),
+            collaboratorStates = states.toList(),
             syncStatus = status, tempIdMapping = mapping,
         )
     }
@@ -97,7 +105,7 @@ class FakeTodoist : Transport {
         when (c.type) {
             "item_add" -> {
                 c.arg("section_id")?.let { sid -> if (sections[sid]?.first?.isDeleted != false) return "Section not found" }
-                val id = item(c.arg("project_id")!!, c.arg("content")!!, c.arg("section_id"), null, c.arg("responsible_uid"))
+                val id = item(c.arg("project_id")!!, c.arg("content")!!, c.arg("section_id"), null, c.arg("responsible_uid"), description = c.arg("description") ?: "")
                 mapping[c.tempId!!] = id
             }
             "section_add" -> mapping[c.tempId!!] = section(c.arg("project_id")!!, c.arg("name")!!)
@@ -118,6 +126,11 @@ class FakeTodoist : Transport {
                 val i = live(c.arg("id")) ?: return "Item not found"
                 val sec = c.arg("section_id")
                 items[i.id] = (if (sec != null) i.copy(sectionId = sec) else i.copy(sectionId = null, projectId = c.arg("project_id")!!)) to ++rev
+            }
+            "item_update" -> {
+                if (c.args.keys != setOf("id", "description")) return "Only descriptions may be updated"
+                val i = live(c.arg("id")) ?: return "Item not found"
+                items[i.id] = i.copy(description = c.arg("description")!!) to ++rev
             }
             else -> return "Unknown command"
         }

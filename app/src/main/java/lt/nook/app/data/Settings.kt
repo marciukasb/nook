@@ -12,6 +12,7 @@ class Settings(private val prefs: SharedPreferences) {
     }
 
     companion object {
-        val DEFAULTS = mapOf(Kind.GROCERIES to "Groceries", Kind.SHOPPING to "Shopping", Kind.TASKS to "Shared tasks")
+        val DEFAULTS = mapOf(Kind.GROCERIES to "Groceries", Kind.SHOPPING to "Shopping", Kind.TASKS to "Shared tasks",
+            Kind.ACHIEVEMENTS to "Achievements")
     }
 }

@@ -37,6 +37,7 @@ data class RItem(
     @SerialName("section_id") val sectionId: String? = null,
     @SerialName("parent_id") val parentId: String? = null,
     val content: String = "",
+    val description: String = "",
     val checked: Boolean = false,
     @SerialName("is_deleted") val isDeleted: Boolean = false,
     @SerialName("child_order") val childOrder: Int = 0,
@@ -110,16 +111,20 @@ fun decodeCommand(s: String): Command = TodoistJson.decodeFromString(Command.ser
 
 private fun newId() = UUID.randomUUID().toString()
 
-fun addItem(content: String, projectId: String, sectionId: String?, responsibleUid: String?) = Command(
+fun addItem(content: String, projectId: String, sectionId: String?, responsibleUid: String?, description: String = "") = Command(
     "item_add", newId(), newId(),
     buildJsonObject {
         put("content", content); put("project_id", projectId)
         if (sectionId != null) put("section_id", sectionId)
         if (responsibleUid != null) put("responsible_uid", responsibleUid)
+        if (description.isNotEmpty()) put("description", description)
     })
 
 fun closeItem(id: String) = Command("item_close", newId(), null, buildJsonObject { put("id", id) })
 fun uncompleteItem(id: String) = Command("item_uncomplete", newId(), null, buildJsonObject { put("id", id) })
+
+/** The only edit Nook makes to an item: its description. */
+fun updateDescription(id: String, text: String) = Command("item_update", newId(), null, buildJsonObject { put("id", id); put("description", text) })
 
 fun moveItem(id: String, sectionId: String?, projectId: String) = Command(
     "item_move", newId(), null,

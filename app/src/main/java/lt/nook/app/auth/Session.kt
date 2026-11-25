@@ -10,7 +10,8 @@ import lt.nook.app.sync.SyncError
 import lt.nook.app.sync.Transport
 
 sealed interface TestResult {
-    data class Ok(val projects: List<String>, val people: List<String>) : TestResult
+    /** [noAchievements]: the name of the optional Achievements project when Todoist has none (yet). */
+    data class Ok(val projects: List<String>, val people: List<String>, val noAchievements: String? = null) : TestResult
     data object Rejected : TestResult
     data class Missing(val names: List<String>) : TestResult
     data object NoConnection : TestResult
@@ -30,7 +31,8 @@ suspend fun testConnection(transport: Transport, token: String, names: Map<Kind,
             listOfNotNull(r.user?.id)
         val people = (r.collaborators.associate { it.id to it.fullName } + listOfNotNull(r.user).associate { it.id to it.fullName })
             .filterKeys { it in members }.let { lt.nook.app.core.shortNames(it) }.values.sorted()
-        TestResult.Ok(wanted, people)
+        val ach = names[Kind.ACHIEVEMENTS].orEmpty()
+        TestResult.Ok(if (ach in have) wanted + ach else wanted, people, ach.takeIf { it !in have })
     }
 } catch (e: SyncError.Auth) {
     TestResult.Rejected

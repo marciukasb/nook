@@ -24,6 +24,7 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.ShoppingCart
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Place
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
@@ -75,9 +76,10 @@ import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 
-val Kind.title get() = when (this) { Kind.GROCERIES -> "Groceries"; Kind.SHOPPING -> "Shopping"; Kind.TASKS -> "Tasks" }
+val Kind.title get() = when (this) { Kind.GROCERIES -> "Groceries"; Kind.SHOPPING -> "Shopping"; Kind.TASKS -> "Tasks"; Kind.ACHIEVEMENTS -> "Achievements" }
 private val Kind.icon: ImageVector get() = when (this) {
     Kind.GROCERIES -> Icons.Filled.ShoppingCart; Kind.SHOPPING -> Icons.Filled.Place; Kind.TASKS -> Icons.Filled.CheckCircle
+    Kind.ACHIEVEMENTS -> Icons.Filled.Star
 }
 
 private val nextFmt = DateTimeFormatter.ofPattern("EEE d MMM", Locale.ENGLISH)

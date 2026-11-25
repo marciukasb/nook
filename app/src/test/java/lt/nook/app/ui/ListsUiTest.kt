@@ -68,10 +68,10 @@ class ListsUiTest {
     private fun openAdd() = rule.onNodeWithContentDescription("Add").performClick()
     private fun type(t: String) = rule.onNodeWithTag("addField").performTextInput(t)
 
-    @Test fun threeTabs_onlyThese() {
+    @Test fun fourTabs_achievementsLast() {
         start()
-        listOf("Groceries", "Shopping", "Tasks").forEach { rule.onNode(hasText(it) and isTab()).assertExists() }
-        assertEquals(3, rule.onAllNodes(isTab()).fetchSemanticsNodes().size)
+        listOf("Groceries", "Shopping", "Tasks", "Achievements").forEach { rule.onNode(hasText(it) and isTab()).assertExists() }
+        assertEquals(4, rule.onAllNodes(isTab()).fetchSemanticsNodes().size)
     }
 
     @Test fun groupsShowUnderSectionsWithOtherLast() {

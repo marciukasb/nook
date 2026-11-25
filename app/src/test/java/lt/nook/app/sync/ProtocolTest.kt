@@ -54,6 +54,13 @@ class ProtocolTest {
         assertNull(json(closeItem("i1"))["temp_id"])
     }
 
+    @Test fun descriptions() {
+        assertEquals(JsonObject(mapOf("id" to JsonPrimitive("i1"), "description" to JsonPrimitive("x"))), json(updateDescription("i1", "x"))["args"])
+        assertEquals(JsonPrimitive("x"), json(addItem("A", "p1", null, null, "x"))["args"]!!.jsonObject["description"])
+        assertNull(json(addItem("A", "p1", null, null, ""))["args"]!!.jsonObject["description"])
+        assertEquals("", parseSync("""{"sync_token":"t","items":[{"id":"1","project_id":"p","description":null}]}""").items[0].description)
+    }
+
     @Test fun syncStatusResults() {
         val r = parseSync("""{"sync_token":"t","full_sync":false,"sync_status":{"a":"ok","b":{"error_code":22,"error":"Item not found","http_code":404}},"temp_id_mapping":{"x":"9"}}""")
         assertEquals(CommandResult.Ok, r.result("a"))

@@ -62,7 +62,7 @@ fun AddSheet(engine: SyncEngine, memory: CategoryMemory, kind: Kind, scope: Coro
     var suggestions by remember { mutableStateOf(emptyList<Known>()) }
     val sections by remember(kind) { engine.sections(kind) }.collectAsState(initial = emptyList())
     val items by remember(kind) { engine.items(kind) }.collectAsState(initial = emptyList())
-    val people by remember { engine.people() }.collectAsState(initial = emptyList())
+    val people by remember { engine.people(kind) }.collectAsState(initial = emptyList())
     val focus = remember { FocusRequester() }
     val lists = kind != Kind.TASKS
 

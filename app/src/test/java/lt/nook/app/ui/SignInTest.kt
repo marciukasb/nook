@@ -50,6 +50,24 @@ class SignInTest {
         assertEquals("Shared tasks", saved!!.second[Kind.TASKS])
     }
 
+    @Test fun signIn_savesWithoutAchievements() {
+        show()
+        rule.onNodeWithTag("token").performTextInput("good")
+        rule.onNodeWithText("Test").performClick()
+        rule.waitForIdle()
+        rule.onNodeWithText("No \"Achievements\" project yet. That tab will tell you how to make one.").assertExists()
+        rule.onNodeWithText("Save").assertIsEnabled()
+    }
+
+    @Test fun signIn_findsAchievements() {
+        fake.addAchievementsProject()
+        show()
+        rule.onNodeWithTag("token").performTextInput("good")
+        rule.onNodeWithText("Test").performClick()
+        rule.waitForIdle()
+        rule.onNodeWithText("Found Groceries, Shopping, Shared tasks, Achievements").assertExists()
+    }
+
     @Test fun badToken_showsRejected_saveDisabled() {
         show()
         rule.onNodeWithTag("token").performTextInput("nope")

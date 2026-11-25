@@ -50,7 +50,8 @@ fun SignInScreen(
         Text("Paste your Todoist API token (Todoist → Settings → Integrations → Developer). It stays on this phone.")
         OutlinedTextField(token, { token = it; result = null }, Modifier.fillMaxWidth().testTag("token"),
             label = { Text("Todoist token") }, singleLine = true, visualTransformation = PasswordVisualTransformation())
-        listOf(Kind.GROCERIES to "Groceries project", Kind.SHOPPING to "Shopping project", Kind.TASKS to "Tasks project").forEach { (k, label) ->
+        listOf(Kind.GROCERIES to "Groceries project", Kind.SHOPPING to "Shopping project", Kind.TASKS to "Tasks project",
+            Kind.ACHIEVEMENTS to "Achievements project (optional)").forEach { (k, label) ->
             OutlinedTextField(names.getValue(k), { v -> names = names + (k to v); result = null },
                 Modifier.fillMaxWidth().testTag("name_${k.name}"), label = { Text(label) }, singleLine = true)
         }
@@ -66,6 +67,7 @@ fun SignInScreen(
             is TestResult.Ok -> {
                 Text("Found ${r.projects.joinToString(", ")}")
                 Text("People: ${r.people.joinToString(", ")}")
+                r.noAchievements?.let { Text("No \"$it\" project yet. That tab will tell you how to make one.") }
             }
             TestResult.Rejected -> Text("Token rejected — copy it again from Todoist", color = MaterialTheme.colorScheme.error)
             is TestResult.Missing -> r.names.forEach { Text("Project \"$it\" not found", color = MaterialTheme.colorScheme.error) }

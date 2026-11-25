@@ -10,9 +10,11 @@ import androidx.room.PrimaryKey
 import androidx.room.Query
 import androidx.room.RoomDatabase
 import androidx.room.Upsert
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import kotlinx.coroutines.flow.Flow
 
-enum class Kind { GROCERIES, SHOPPING, TASKS }
+enum class Kind { GROCERIES, SHOPPING, TASKS, ACHIEVEMENTS }
 
 @Entity
 data class ItemE(
@@ -27,6 +29,7 @@ data class ItemE(
     val dueString: String?,
     val recurring: Boolean,
     val hidden: Boolean = false,
+    val description: String = "",
 )
 
 @Entity
@@ -36,7 +39,7 @@ data class SectionE(@PrimaryKey val id: String, val projectId: String, val name:
 data class ProjectE(@PrimaryKey val id: String, val name: String)
 
 @Entity
-data class PersonE(@PrimaryKey val id: String, val name: String, val inTasks: Boolean)
+data class PersonE(@PrimaryKey val id: String, val name: String, val inTasks: Boolean, val inAchievements: Boolean = false)
 
 /** A sync command waiting to be acknowledged by Todoist, sent in [seq] order. */
 @Entity(indices = [Index("uuid", unique = true)])
@@ -103,9 +106,19 @@ interface NookDao {
 
 @Database(
     entities = [ItemE::class, SectionE::class, ProjectE::class, PersonE::class, PendingE::class, MetaE::class, KnownE::class, IdMapE::class],
-    version = 1, exportSchema = false,
+    version = 2, exportSchema = false,
 )
 abstract class NookDb : RoomDatabase() {
     abstract fun dao(): NookDao
     abstract fun memory(): MemoryDao
+}
+
+/** 1.4: item descriptions and the Achievements project's members. Unsent changes and the category memory stay; the next
+ *  sync is a full one, so descriptions of items already here arrive too. */
+val MIGRATION_1_2 = object : Migration(1, 2) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE `ItemE` ADD COLUMN `description` TEXT NOT NULL DEFAULT ''")
+        db.execSQL("ALTER TABLE `PersonE` ADD COLUMN `inAchievements` INTEGER NOT NULL DEFAULT 0")
+        db.execSQL("UPDATE `MetaE` SET `value` = '*' WHERE `key` = 'sync_token'")
+    }
 }
